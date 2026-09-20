@@ -1,3 +1,9 @@
+<#  
+    replace-sound-move.ps1
+    -----------------------
+    Compares two folders with vehicle .sui files and copies sound_move lines from source to destination
+    Originally written for USCC patches
+#>
 
 $srcDir = Read-Host "Enter the source folder with the sound_move .sui files"
 $dstDir = Read-Host "Enter the destination folder that will be updated"
