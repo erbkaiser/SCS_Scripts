@@ -1,3 +1,9 @@
+<#  
+    Update-ManifestCompatibility.ps1
+    -----------------------
+    When run inside an ETS2 or ATS mod folder, updates every compatibility line to $version
+#>
+
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$Folder = (Get-Location).Path,
