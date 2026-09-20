@@ -190,7 +190,12 @@ function Invoke-ZIPArchive {
     $work = Join-Path $WorkRoot ([guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path $work | Out-Null
     try {
-        Invoke-ArchiveTool $SevenZip @('x', '-y', "-o$work", $Archive.FullName)
+        Push-Location $work
+        try {
+            Invoke-ArchiveTool $SevenZip @('x', '-y', "-o$work", $Archive.FullName)
+        } finally {
+            Pop-Location
+        }
 
         $changed = @(Get-ChildItem -Path $work -Filter 'manifest.sii' -File -Recurse | ForEach-Object {
             Update-Manifest $_.FullName
@@ -201,8 +206,12 @@ function Invoke-ZIPArchive {
         }
 
         $replacement = Join-Path $WorkRoot "$($Archive.Name).new"
-        $contents = Join-Path $work '*'
-        Invoke-ArchiveTool $SevenZip @('a', '-tzip', '-y', $replacement, $contents)
+        Push-Location $work
+        try {
+            Invoke-ArchiveTool $SevenZip @('a', '-tzip', '-y', $replacement, '*')
+        } finally {
+            Pop-Location
+        }
         Move-Item -LiteralPath $replacement -Destination $Archive.FullName -Force
         return $true
     } finally {
