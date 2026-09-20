@@ -48,11 +48,15 @@ function Invoke-ArchiveTool {
     param(
         [string]$Tool,
         [string[]]$Arguments,
+        [string]$WorkingDirectory,
         [int]$TimeoutSeconds = $archiveToolTimeoutSeconds
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $Tool
+    if ($WorkingDirectory) {
+        $startInfo.WorkingDirectory = $WorkingDirectory
+    }
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
@@ -158,7 +162,7 @@ function Invoke-SCSArchive {
     try {
         Push-Location $work
         try {
-            Invoke-ArchiveTool $Extractor @($Archive.FullName)
+            Invoke-ArchiveTool $Extractor @($Archive.FullName) $work
         } finally {
             Pop-Location
         }
@@ -172,7 +176,7 @@ function Invoke-SCSArchive {
         }
 
         $replacement = Join-Path $WorkRoot "$($Archive.Name).new"
-        Invoke-ArchiveTool $Packer @('create', $replacement, '-root', $work)
+        Invoke-ArchiveTool $Packer @('create', $replacement, '-root', $work) $WorkRoot
         Move-Item -LiteralPath $replacement -Destination $Archive.FullName -Force
         return $true
     } finally {
@@ -192,7 +196,7 @@ function Invoke-ZIPArchive {
     try {
         Push-Location $work
         try {
-            Invoke-ArchiveTool $SevenZip @('x', '-y', "-o$work", $Archive.FullName)
+            Invoke-ArchiveTool $SevenZip @('x', '-y', "-o$work", $Archive.FullName) $work
         } finally {
             Pop-Location
         }
@@ -208,7 +212,7 @@ function Invoke-ZIPArchive {
         $replacement = Join-Path $WorkRoot "$($Archive.Name).new"
         Push-Location $work
         try {
-            Invoke-ArchiveTool $SevenZip @('a', '-tzip', '-y', $replacement, '*')
+            Invoke-ArchiveTool $SevenZip @('a', '-tzip', '-y', $replacement, '*') $work
         } finally {
             Pop-Location
         }
