@@ -14,6 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $version = '1.61'
+$archiveToolTimeoutSeconds = 30
 $previousVersion = ([decimal]$version - 0.01).ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture)
 #$previousVersion = '1.60'
 
@@ -46,12 +47,42 @@ function Get-ToolPath {
 function Invoke-ArchiveTool {
     param(
         [string]$Tool,
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [int]$TimeoutSeconds = $archiveToolTimeoutSeconds
     )
 
-    & $Tool @Arguments *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Archive tool failed with exit code ${LASTEXITCODE}: $Tool $($Arguments -join ' ')"
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Tool
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = ($Arguments | ForEach-Object {
+        '"{0}"' -f (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1')
+    }) -join ' '
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start archive tool: $Tool"
+        }
+
+        $outputTask = $process.StandardOutput.ReadToEndAsync()
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            throw [System.TimeoutException]::new("Archive tool timed out after $TimeoutSeconds seconds: $Tool $($Arguments -join ' ')")
+        }
+
+        $outputTask.GetAwaiter().GetResult() | Out-Null
+        $errorTask.GetAwaiter().GetResult() | Out-Null
+        if ($process.ExitCode -ne 0) {
+            throw "Archive tool failed with exit code $($process.ExitCode): $Tool $($Arguments -join ' ')"
+        }
+    } finally {
+        $process.Dispose()
     }
 }
 
@@ -232,11 +263,16 @@ try {
                     }
                 }
             } catch {
-                $unreadableCount++
                 if ($backupCreated) {
                     Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
                 }
-                Write-Host "Could not read: $($archive.Name) ($($_.Exception.Message))"
+                if ($_.Exception -is [System.TimeoutException]) {
+                    $skippedCount++
+                    Write-Host "Skipped: $($archive.Name) (archive tool timed out after $archiveToolTimeoutSeconds seconds)"
+                } else {
+                    $unreadableCount++
+                    Write-Host "Could not read: $($archive.Name) ($($_.Exception.Message))"
+                }
             }
         }
     }
