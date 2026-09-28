@@ -169,12 +169,14 @@ Function Repair-ScsTrafficVariants {
                 }
 
                 $WorkingPath = $TempFolder
-                Write-Host "Detected archive: $($InputItem.Name) [$archiveType]" -ForegroundColor DarkGray
-                Write-Host "Extracting to temporary folder..." -ForegroundColor Cyan
-                if ($archiveType -eq 'zipfs') {
-                    Write-Host "Repack path: ZIPFS" -ForegroundColor DarkGray
-                } else {
-                    Write-Host "Repack path: HashFS -> ZIP fallback if needed" -ForegroundColor DarkGray
+                if (-not $IsQuiet) {
+                    Write-Host "Detected archive: $($InputItem.Name) [$archiveType]" -ForegroundColor DarkGray
+                    Write-Host "Extracting to temporary folder..." -ForegroundColor Cyan
+                    if ($archiveType -eq 'zipfs') {
+                        Write-Host "Repack path: ZIPFS" -ForegroundColor DarkGray
+                    } else {
+                        Write-Host "Repack path: HashFS -> ZIP fallback if needed" -ForegroundColor DarkGray
+                    }
                 }
             } catch {
                 Remove-Item -Path $TempFolder.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
@@ -192,12 +194,12 @@ Function Repair-ScsTrafficVariants {
 
         if (-not (Test-Path -Path $ScanRoot)) {
             if ($IsArchive) {
-                Write-Host -ForegroundColor Yellow "No def directory found under archive '$($InputItem.Name)'. Cleaning up temporary extraction folder."
+                if (-not $IsQuiet) { Write-Host -ForegroundColor Yellow "No def directory found under archive '$($InputItem.Name)'. Cleaning up temporary extraction folder." }
                 $Summary.SkippedArchives++
                 Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount 0 -ReferenceCount 0 -Outcome 'no definition directory found; skipped'
                 Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
             } else {
-                Write-Host -ForegroundColor Yellow "No def directory found under '$($WorkingPath.FullName)'. Skipping."
+                if (-not $IsQuiet) { Write-Host -ForegroundColor Yellow "No def directory found under '$($WorkingPath.FullName)'. Skipping." }
             }
             return
         }
@@ -273,7 +275,7 @@ Function Repair-ScsTrafficVariants {
 
             if ($FailedFixes.Count -gt 0) {
                 if ($IsArchive) { $ArchiveVerificationFailures++ }
-                if (-not $IsQuiet -and -not $IsArchive) {
+                if (-not $IsQuiet) {
                     Write-Host -ForegroundColor Red "   Repair verification failed for '$($FailedFixes -join "', '")'.`n"
                 }
                 continue
@@ -312,8 +314,8 @@ Function Repair-ScsTrafficVariants {
             if (-not $AnyRepairs) {
                 if (-not $IsQuiet) {
                     Write-Host -ForegroundColor Yellow "No repairs were needed for '$($InputItem.Name)'. Leaving the original archive intact.`n"
+                    Write-Host "Status: skipped" -ForegroundColor DarkYellow
                 }
-                Write-Host "Status: skipped" -ForegroundColor DarkYellow
                 $Summary.SkippedArchives++
                 if ($ArchiveDeclinedCount -gt 0) {
                     $outcome = 'repair declined; left unchanged'
@@ -348,21 +350,21 @@ Function Repair-ScsTrafficVariants {
                     if (Test-Path -LiteralPath $replacement) {
                         Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue -WhatIf:$false
                     }
-                    Write-Host "Using ZIPFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray
+                    if (-not $IsQuiet) { Write-Host "Using ZIPFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray }
                     New-ZIPFSArchive -SourceDirectory $WorkingPath.FullName -DestinationPath $replacement -SevenZip $SevenZipExe
                     if (-not $NoBackup.IsPresent) {
                         Copy-Item -LiteralPath $OriginalArchivePath -Destination "$OriginalArchivePath.bak" -Force -ErrorAction Stop
                     }
                     Move-Item -LiteralPath $replacement -Destination $OriginalArchivePath -Force
                     if (-not $IsQuiet) { Write-Host -ForegroundColor Green "Successfully repacked ZIPFS archive: $($InputItem.Name)`n" }
-                    Write-Host "Status: updated" -ForegroundColor Green
+                    if (-not $IsQuiet) { Write-Host "Status: updated" -ForegroundColor Green }
                     $Summary.ArchivesUpdated++
                     $outcome = if ($ArchiveVerificationFailures -gt 0) { "updated; $ArchiveVerificationFailures definition(s) failed verification" } else { 'updated' }
                     Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome $outcome
                 } else {
                     try {
                         $replacement = "$($OriginalArchivePath).zip.new"
-                        Write-Host "Using HashFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray
+                        if (-not $IsQuiet) { Write-Host "Using HashFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray }
                         if (Test-Path -LiteralPath $replacement) {
                             Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue -WhatIf:$false
                         }
@@ -375,11 +377,13 @@ Function Repair-ScsTrafficVariants {
                         Move-Item -LiteralPath $replacement -Destination $OriginalArchivePath -Force
                         $Summary.ArchivesUpdated++
                         if ($repackResult.UsedFallback) {
-                            Write-Host "HashFS repack failed; ZIP fallback succeeded for $($InputItem.Name)" -ForegroundColor Yellow
-                            Write-Host "Status: updated via ZIP fallback" -ForegroundColor Yellow
+                            if (-not $IsQuiet) {
+                                Write-Host "HashFS repack failed; ZIP fallback succeeded for $($InputItem.Name)" -ForegroundColor Yellow
+                                Write-Host "Status: updated via ZIP fallback" -ForegroundColor Yellow
+                            }
                             $Summary.ZipFallbackArchives++
                         } else {
-                            Write-Host "Status: updated" -ForegroundColor Green
+                            if (-not $IsQuiet) { Write-Host "Status: updated" -ForegroundColor Green }
                         }
                         $outcome = if ($repackResult.UsedFallback) { 'updated via ZIP fallback' } else { 'updated' }
                         if ($ArchiveVerificationFailures -gt 0) { $outcome += "; $ArchiveVerificationFailures definition(s) failed verification" }
@@ -395,7 +399,7 @@ Function Repair-ScsTrafficVariants {
                                 Value = 'HashFS repack failed and ZIP fallback also failed'
                             })
                         }
-                        Write-Host "Status: repack failed" -ForegroundColor Red
+                        if (-not $IsQuiet) { Write-Host "Status: repack failed" -ForegroundColor Red }
                         $Summary.FailedRepack++
                         Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome 'repack failed; original left unchanged'
                         Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
@@ -405,7 +409,7 @@ Function Repair-ScsTrafficVariants {
             } catch {
                 $Summary.FailedRepack++
                 Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome 'repack failed; original left unchanged'
-                Write-Host "Status: repack failed" -ForegroundColor Red
+                if (-not $IsQuiet) { Write-Host "Status: repack failed" -ForegroundColor Red }
                 Write-Error "Failed to repack '$($InputItem.Name)'.`nError: $_"
             } finally {
                 Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
@@ -489,7 +493,9 @@ Function Repair-ScsTrafficVariants {
         if ($NoBackup.IsPresent) { $workerParameters.NoBackup = $true }
         if ($FullScan.IsPresent) { $workerParameters.FullScan = $true }
         if ($Quiet.IsPresent) { $workerParameters.Quiet = $true }
-        Write-Host "Processing $($ArchiveTargets.Count) archives with up to $ThrottleLimit workers. Each archive is processed as one unit.`n" -ForegroundColor Cyan
+        if (-not $IsQuiet) {
+            Write-Host "Processing $($ArchiveTargets.Count) archives with up to $ThrottleLimit workers. Each archive is processed as one unit.`n" -ForegroundColor Cyan
+        }
         $workerBatch = Invoke-ArchiveWorkerBatch -ScriptPath $PSCommandPath -ArchivePaths @($ArchiveTargets | ForEach-Object { $_.FullName }) -WorkerParameters $workerParameters -PathParameterName 'RootPath' -Operation 'Repair and replace archive' -ThrottleLimit $ThrottleLimit -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIfPreference
         $Summary.DeclinedOperations += $workerBatch.DeclinedPaths.Count
         foreach ($worker in $workerBatch.Results) {
@@ -511,7 +517,9 @@ Function Repair-ScsTrafficVariants {
                     ReferenceCount = 0
                     Outcome = 'worker failed; left unchanged'
                 })
-                Write-Host "Worker failed for '$($worker.Path)': $($worker.Errors -join '; ')" -ForegroundColor Red
+                if (-not $IsQuiet) {
+                    Write-Host "Worker failed for '$($worker.Path)': $($worker.Errors -join '; ')" -ForegroundColor Red
+                }
             }
         }
     } else {
@@ -546,8 +554,9 @@ Function Repair-ScsTrafficVariants {
                 Write-Host "Archive ${archiveName}: $($archiveReport.Outcome)."
             }
         }
-        Write-Host "`nSummary: $($Summary.UnitFilesRepaired) unit file(s) repaired; $($Summary.ArchivesUpdated) archive(s) updated ($($Summary.ZipFallbackArchives) via ZIP fallback); $($Summary.WouldRepair) unit file(s) would be repaired; $($Summary.WouldUpdateArchives) archive(s) would be updated; $($Summary.SkippedArchives) archive(s) skipped; $($Summary.UnreadableArchives) unreadable archive(s); $($Summary.FailedRepack) repack failure(s); $($Summary.DeclinedOperations) operation(s) declined.`n"
     }
+
+    Write-Host "`nSummary: $($Summary.UnitFilesRepaired) unit file(s) repaired; $($Summary.ArchivesUpdated) archive(s) updated ($($Summary.ZipFallbackArchives) via ZIP fallback); $($Summary.WouldRepair) unit file(s) would be repaired; $($Summary.WouldUpdateArchives) archive(s) would be updated; $($Summary.SkippedArchives) archive(s) skipped; $($Summary.UnreadableArchives) unreadable archive(s); $($Summary.FailedRepack) repack failure(s); $($Summary.DeclinedOperations) operation(s) declined.`n"
 
     if ($IsQuiet) {
         return $AllProblems

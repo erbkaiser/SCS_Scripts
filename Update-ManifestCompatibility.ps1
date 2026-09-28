@@ -9,7 +9,7 @@ archives to the configured target version. Accepts a folder or one .scs/.zip arc
 Runs in dry-run mode by default. Use -ApplyFixes to repack changed archives; a .bak backup is
 created before replacement unless -NoBackup is specified. -WhatIf previews apply operations.
 Archive workers default to four for folder input and one for a single archive; override with
--ThrottleLimit.
+-ThrottleLimit. Use -Silent (or -Q) to suppress status output.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -17,6 +17,8 @@ param(
     [string]$ToolsFolder = (Get-Location).Path,
     #[string]$ToolsFolder = C:\Tools,
     [switch]$NoBackup,
+    [Alias('Q')]
+    [switch]$Silent,
     [Alias('Apply', 'Fix')]
     [switch]$ApplyFixes,
     [Parameter(HelpMessage = 'Maximum simultaneous archive workers; defaults to four for folders and one for a single archive.')]
@@ -26,6 +28,24 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$Quiet = $Silent
+function Write-Status {
+    param(
+        [Parameter(Position = 0)][object]$Object,
+        [System.ConsoleColor]$ForegroundColor,
+        [System.ConsoleColor]$BackgroundColor,
+        [switch]$NoNewline
+    )
+
+    if (-not $Quiet.IsPresent) {
+        $hostParameters = @{ Object = $Object }
+        if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $hostParameters.ForegroundColor = $ForegroundColor }
+        if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $hostParameters.BackgroundColor = $BackgroundColor }
+        if ($NoNewline.IsPresent) { $hostParameters.NoNewline = $true }
+        Write-Host @hostParameters
+    }
+}
+
 $parallelHelper = Join-Path $PSScriptRoot 'Archive-Parallelism.psm1'
 Import-Module -Name $parallelHelper -Force
 $archiveOperations = Join-Path $PSScriptRoot 'Archive-Operations.psm1'
@@ -209,7 +229,8 @@ $declinedCount = 0
 if (-not $WorkerMode.IsPresent -and $archives.Count -gt 1 -and $ThrottleLimit -gt 1) {
     $workerParameters = @{ ToolsFolder = $ToolsFolder }
     if ($NoBackup.IsPresent) { $workerParameters.NoBackup = $true }
-    Write-Host "Processing $($archives.Count) archives with up to $ThrottleLimit workers.`n" -ForegroundColor Cyan
+    if ($Quiet.IsPresent) { $workerParameters.Silent = $true }
+    Write-Status "Processing $($archives.Count) archives with up to $ThrottleLimit workers.`n" -ForegroundColor Cyan
     $workerBatch = Invoke-ArchiveWorkerBatch -ScriptPath $PSCommandPath -ArchivePaths @($archives | ForEach-Object { $_.FullName }) -WorkerParameters $workerParameters -Operation 'Replace archive with updated manifest' -ThrottleLimit $ThrottleLimit -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIfPreference
     $declinedCount += $workerBatch.DeclinedPaths.Count
 
@@ -222,11 +243,11 @@ if (-not $WorkerMode.IsPresent -and $archives.Count -gt 1 -and $ThrottleLimit -g
             $declinedCount += $worker.Result.Declined
         } else {
             $unreadableCount++
-            Write-Host "Worker failed for '$($worker.Path)': $($worker.Errors -join '; ')" -ForegroundColor Red
+            Write-Status "Worker failed for '$($worker.Path)': $($worker.Errors -join '; ')" -ForegroundColor Red
         }
     }
 
-    Write-Host "Summary: $updatedCount updated, $wouldUpdateCount would update, $skippedCount skipped, $unreadableCount could not be read, $declinedCount declined."
+    Microsoft.PowerShell.Utility\Write-Host "Summary: $updatedCount updated, $wouldUpdateCount would update, $skippedCount skipped, $unreadableCount could not be read, $declinedCount declined."
     return
 }
 
@@ -271,14 +292,14 @@ try {
             if ($changed) {
                 if ($applyArchive) {
                     $updatedCount++
-                    Write-Host "Updated: $($archive.Name)"
+                    Write-Status "Updated: $($archive.Name)"
                 } else {
                     $wouldUpdateCount++
-                    Write-Host "Would update: $($archive.FullName)" -ForegroundColor Yellow
+                    Write-Status "Would update: $($archive.FullName)" -ForegroundColor Yellow
                 }
             } else {
                 $skippedCount++
-                Write-Host "Skipped: $($archive.Name)"
+                Write-Status "Skipped: $($archive.Name)"
                 if ($backupCreated) {
                     Remove-Item -LiteralPath $backupPath -Force
                 }
@@ -288,7 +309,7 @@ try {
             if ($backupCreated) {
                 Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
             }
-            Write-Host "Could not read: $($archive.Name) ($($_.Exception.Message))"
+            Write-Status "Could not read: $($archive.Name) ($($_.Exception.Message))"
         }
         } finally {
             Exit-ArchivePathLock -Mutex $archiveLock
@@ -310,4 +331,4 @@ if ($WorkerMode.IsPresent) {
     return
 }
 
-Write-Host "Summary: $updatedCount updated, $wouldUpdateCount would update, $skippedCount skipped, $unreadableCount could not be read, $declinedCount declined."
+Microsoft.PowerShell.Utility\Write-Host "Summary: $updatedCount updated, $wouldUpdateCount would update, $skippedCount skipped, $unreadableCount could not be read, $declinedCount declined."

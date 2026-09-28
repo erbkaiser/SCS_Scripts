@@ -121,13 +121,20 @@ function Invoke-ArchiveWorkerPool {
             $_ -and $_.PSObject.Properties['WorkerEnvelope'] -and $_.WorkerEnvelope
         } | Select-Object -First 1
 
+        $silentWorker = $Entry.Arguments -and (
+            ($Entry.Arguments.ContainsKey('Silent') -and [bool]$Entry.Arguments.Silent) -or
+            ($Entry.Arguments.ContainsKey('Quiet') -and [bool]$Entry.Arguments.Quiet)
+        )
+
         if ($envelope) {
+            if (-not $silentWorker) {
             foreach ($log in $envelope.Logs) {
                 if ($log.HasForegroundColor) {
                     Write-Host "[$($Entry.Path)] $($log.Message)" -ForegroundColor $log.ForegroundColor
                 } else {
                     Write-Host "[$($Entry.Path)] $($log.Message)"
                 }
+            }
             }
             $workerResult = $envelope.Output | Where-Object {
                 $_ -and $_.PSObject.Properties['WorkerResult'] -and $_.WorkerResult
@@ -203,7 +210,7 @@ function Invoke-ArchiveWorkerPool {
                     }
                 }
             }
-            $activeWorkers.Add([PSCustomObject]@{ Path = $item.Path; Job = $job })
+            $activeWorkers.Add([PSCustomObject]@{ Path = $item.Path; Job = $job; Arguments = $item.Arguments })
             $nextWorkItem++
         }
 

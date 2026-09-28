@@ -12,7 +12,8 @@ in place. Existing .scs destinations are not overwritten.
 
 Runs in dry-run mode by default. Use -ApplyFixes to replace archives; a .bak backup is created
 unless -NoBackup is specified. -WhatIf previews apply operations. Archive workers default to
-four for folder input and one for a single archive; override with -ThrottleLimit.
+four for folder input and one for a single archive; override with -ThrottleLimit. Use -Silent
+(or -Q) to suppress status output.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -21,6 +22,8 @@ param(
     [Alias('Apply', 'Fix')]
     [switch]$ApplyFixes,
     [switch]$NoBackup,
+    [Alias('Q')]
+    [switch]$Silent,
     [Parameter(HelpMessage = 'Maximum simultaneous archive workers; defaults to four for folders and one for a single archive.')]
     [ValidateRange(0, 64)]
     [int]$ThrottleLimit = 0,
@@ -28,12 +31,30 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$Quiet = $Silent
+function Write-Status {
+    param(
+        [Parameter(Position = 0)][object]$Object,
+        [System.ConsoleColor]$ForegroundColor,
+        [System.ConsoleColor]$BackgroundColor,
+        [switch]$NoNewline
+    )
+
+    if (-not $Quiet.IsPresent) {
+        $hostParameters = @{ Object = $Object }
+        if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $hostParameters.ForegroundColor = $ForegroundColor }
+        if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $hostParameters.BackgroundColor = $BackgroundColor }
+        if ($NoNewline.IsPresent) { $hostParameters.NoNewline = $true }
+        Write-Host @hostParameters
+    }
+}
+
 $parallelHelper = Join-Path $PSScriptRoot 'Archive-Parallelism.psm1'
 Import-Module -Name $parallelHelper -Force
 $archiveOperations = Join-Path $PSScriptRoot 'Archive-Operations.psm1'
 Import-Module -Name $archiveOperations -Force
 $ModeLabel = if (-not $ApplyFixes.IsPresent) { 'Dry run' } elseif ($WhatIfPreference) { 'WhatIf dry run' } else { 'Apply fixes' }
-Write-Host "Mode: $ModeLabel.`n" -ForegroundColor Cyan
+Write-Status "Mode: $ModeLabel.`n" -ForegroundColor Cyan
 
 $PackerExe = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_packer.exe')
 $SevenZipExe = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('7z.exe', '7za.exe', '7z')
@@ -68,7 +89,8 @@ $declinedCount = 0
 if (-not $WorkerMode.IsPresent -and $files.Count -gt 1 -and $ThrottleLimit -gt 1) {
     $workerParameters = @{ ToolsFolder = $ToolsFolder }
     if ($NoBackup.IsPresent) { $workerParameters.NoBackup = $true }
-    Write-Host "Processing $($files.Count) archives with up to $ThrottleLimit workers.`n" -ForegroundColor Cyan
+    if ($Quiet.IsPresent) { $workerParameters.Silent = $true }
+    Write-Status "Processing $($files.Count) archives with up to $ThrottleLimit workers.`n" -ForegroundColor Cyan
     $workerBatch = Invoke-ArchiveWorkerBatch -ScriptPath $PSCommandPath -ArchivePaths @($files | ForEach-Object { $_.FullName }) -WorkerParameters $workerParameters -Operation 'Replace original with repacked HashFS archive' -ThrottleLimit $ThrottleLimit -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIfPreference
     $declinedCount += $workerBatch.DeclinedPaths.Count
 
@@ -81,11 +103,11 @@ if (-not $WorkerMode.IsPresent -and $files.Count -gt 1 -and $ThrottleLimit -gt 1
             $declinedCount += $worker.Result.Declined
         } else {
             $failedCount++
-            Write-Host "Worker failed for '$($worker.Path)': $($worker.Errors -join '; ')" -ForegroundColor Red
+            Write-Status "Worker failed for '$($worker.Path)': $($worker.Errors -join '; ')" -ForegroundColor Red
         }
     }
 
-    Write-Host "`nSummary: $replacedCount replaced, $wouldReplaceCount would replace, $skippedCount skipped, $failedCount repack failed, $declinedCount declined.`n" -ForegroundColor Cyan
+    Microsoft.PowerShell.Utility\Write-Host "`nSummary: $replacedCount replaced, $wouldReplaceCount would replace, $skippedCount skipped, $failedCount repack failed, $declinedCount declined.`n" -ForegroundColor Cyan
     return
 }
 
@@ -102,7 +124,7 @@ foreach ($file in $files) {
     if ($destinationPath -ne $file.FullName) {
         $destinationLock = Enter-ArchivePathLock -Path $destinationPath
         if (Test-Path -LiteralPath $destinationPath) {
-            Write-Host "Skipping ZIP conversion because the .scs destination already exists: $destinationPath" -ForegroundColor Yellow
+            Write-Status "Skipping ZIP conversion because the .scs destination already exists: $destinationPath" -ForegroundColor Yellow
             $skippedCount++
             continue
         }
@@ -114,27 +136,28 @@ foreach ($file in $files) {
         Test-ArchiveOperationApproval -Target $file.FullName -Operation 'Replace original with repacked HashFS archive' -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIfPreference
     }
     if ($ApplyFixes.IsPresent -and -not $applyArchive -and -not $WhatIfPreference) {
-        Write-Host "Replacement declined: $($file.FullName)" -ForegroundColor Yellow
+        Write-Status "Replacement declined: $($file.FullName)" -ForegroundColor Yellow
         $declinedCount++
         continue
     }
 
     $archiveKind = Get-SCSArchiveKind -Path $file.FullName
+    Write-Status "Detected archive: $($file.Name) [$archiveKind]" -ForegroundColor DarkGray
 
     if ($archiveKind -eq 'HashFS') {
-        Write-Host "Skipping HashFS archive: $($file.Name)" -ForegroundColor Yellow
+        Write-Status "Skipping HashFS archive: $($file.Name)" -ForegroundColor Yellow
         $skippedCount++
         continue
     }
 
     if ($archiveKind -ne 'ZIPFS') {
-        Write-Host "Skipping unreadable or unsupported archive: $($file.Name)" -ForegroundColor Yellow
+        Write-Status "Skipping unreadable or unsupported archive: $($file.Name)" -ForegroundColor Yellow
         $skippedCount++
         continue
     }
 
     if (-not (Test-ZipArchiveReadable -Path $file.FullName)) {
-        Write-Host "Skipping encrypted or broken ZIP archive: $($file.Name)" -ForegroundColor Yellow
+        Write-Status "Skipping encrypted or broken ZIP archive: $($file.Name)" -ForegroundColor Yellow
         $skippedCount++
         continue
     }
@@ -143,7 +166,7 @@ foreach ($file in $files) {
     New-Item -ItemType Directory -Path $tempRoot -WhatIf:$false | Out-Null
 
     try {
-        Write-Host "Extracting: $($file.Name)" -ForegroundColor Cyan
+        Write-Status "Extracting: $($file.Name)" -ForegroundColor Cyan
 
         Expand-ZIPFSArchive -ArchivePath $file.FullName -DestinationPath $tempRoot -SevenZip $SevenZipExe
 
@@ -152,41 +175,46 @@ foreach ($file in $files) {
             Remove-Item -LiteralPath $tempOutput -Force -ErrorAction SilentlyContinue -WhatIf:$false
         }
 
-        Write-Host "Trying HashFS repack for: $($file.Name)" -ForegroundColor DarkGray
+        Write-Status "Trying HashFS repack for: $($file.Name)" -ForegroundColor DarkGray
         try {
             New-HashFSArchive -SourceDirectory $tempRoot -DestinationPath $tempOutput -Packer $PackerExe
         } catch {
-            Write-Host "Repack failed; no changes made: $($file.Name)" -ForegroundColor Red
-            Write-Host $_.Exception.Message -ForegroundColor Red
+            Write-Status "Repack failed; no changes made: $($file.Name)" -ForegroundColor Red
+            Write-Status $_.Exception.Message -ForegroundColor Red
             $failedCount++
             continue
         }
 
         if ($applyArchive) {
-            Write-Host "Repack succeeded: $($file.Name)" -ForegroundColor Green
+            Write-Status "Repack succeeded: $($file.Name)" -ForegroundColor Green
             if (-not $NoBackup.IsPresent) {
                 Copy-Item -LiteralPath $file.FullName -Destination "$($file.FullName).bak" -Force -ErrorAction Stop
             }
             Move-Item -LiteralPath $tempOutput -Destination $destinationPath -Force
             if ($destinationPath -ne $file.FullName) {
                 Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
-                Write-Host "Converted: $($file.FullName) -> $destinationPath" -ForegroundColor Green
+                Write-Status "Converted: $($file.FullName) -> $destinationPath" -ForegroundColor Green
+            }
+            elseif ($file.Extension -eq '.scs') {
+                Write-Status "Repacked ZIPFS .scs as HashFS in place: $($file.FullName)" -ForegroundColor Green
             }
             $replacedCount++
         }
         else {
-            Write-Host "Repack succeeded: $($file.Name)" -ForegroundColor Green
+            Write-Status "Repack succeeded: $($file.Name)" -ForegroundColor Green
             if ($destinationPath -ne $file.FullName) {
-                Write-Host "Would convert: $($file.FullName) -> $destinationPath" -ForegroundColor Yellow
+                Write-Status "Would convert: $($file.FullName) -> $destinationPath" -ForegroundColor Yellow
+            } elseif ($file.Extension -eq '.scs') {
+                Write-Status "Would replace ZIPFS .scs with HashFS .scs: $($file.FullName)" -ForegroundColor Yellow
             } else {
-                Write-Host "Would replace: $($file.FullName)" -ForegroundColor Yellow
+                Write-Status "Would replace: $($file.FullName)" -ForegroundColor Yellow
             }
             $wouldReplaceCount++
         }
     }
     catch {
-        Write-Host "Failed to process archive: $($file.Name)" -ForegroundColor Red
-        Write-Host $_.Exception.Message -ForegroundColor Red
+        Write-Status "Failed to process archive: $($file.Name)" -ForegroundColor Red
+        Write-Status $_.Exception.Message -ForegroundColor Red
         $failedCount++
     }
     finally {
@@ -214,4 +242,4 @@ if ($WorkerMode.IsPresent) {
     return
 }
 
-Write-Host "`nSummary: $replacedCount replaced, $wouldReplaceCount would replace, $skippedCount skipped, $failedCount repack failed, $declinedCount declined.`n" -ForegroundColor Cyan
+Microsoft.PowerShell.Utility\Write-Host "`nSummary: $replacedCount replaced, $wouldReplaceCount would replace, $skippedCount skipped, $failedCount repack failed, $declinedCount declined.`n" -ForegroundColor Cyan
