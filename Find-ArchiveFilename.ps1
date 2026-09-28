@@ -2,11 +2,11 @@
 
 <#
 .SYNOPSIS
-Finds filenames or .sui text contents containing a query in folders and archives.
+Finds filenames or .sii/.sui text contents containing a query in folders and archives.
 
 .DESCRIPTION
 Searches loose files recursively when Path is a folder. It also searches the text
-contents of .sui files. ZIPFS archives are searched by enumerating their entries;
+contents of .sii and .sui files. ZIPFS archives are searched by enumerating their entries;
 HashFS archives are extracted to a temporary folder. Folder archives run in parallel.
 #>
 [CmdletBinding()]
@@ -102,7 +102,7 @@ function Find-ArchiveEntry {
                     }
                 }
 
-                if ([System.IO.Path]::GetExtension($entry.Name) -ieq '.sui') {
+                if ([System.IO.Path]::GetExtension($entry.Name) -in '.sii', '.sui') {
                     $entryStream = $entry.Open()
                     Find-TextStreamMatch -Stream $entryStream -Query $Query -RelativePath $entry.FullName -ArchivePath $ArchivePath -ArchiveKind $archiveKind
                 }
@@ -134,7 +134,7 @@ function Find-ArchiveEntry {
                 }
             }
 
-            if ($file.Extension -ieq '.sui') {
+            if ($file.Extension -in '.sii', '.sui') {
                 Find-TextFileMatch -FilePath $file.FullName -Query $Query -ArchivePath $ArchivePath -RelativePath $relativePath -ArchiveKind $archiveKind
             }
         }
@@ -174,7 +174,7 @@ if ($isFolderInput) {
             })
         }
 
-        if ($file.Extension -ieq '.sui') {
+        if ($file.Extension -in '.sii', '.sui') {
             foreach ($textMatch in Find-TextFileMatch -FilePath $file.FullName -Query $SearchTerm -RelativePath $file.FullName -ArchiveKind 'Loose') {
                 $matches.Add($textMatch)
             }
@@ -186,7 +186,7 @@ if ($isFolderInput) {
         Sort-Object -Property FullName)
 } elseif ($inputItem.Extension -in '.zip', '.scs') {
     $archiveFiles = @($inputItem)
-} elseif ($inputItem.Extension -ieq '.sui') {
+} elseif ($inputItem.Extension -in '.sii', '.sui') {
     if ($inputItem.Name.IndexOf($SearchTerm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
         $matches.Add([PSCustomObject]@{
             FileName = $SearchTerm
@@ -200,7 +200,7 @@ if ($isFolderInput) {
         $matches.Add($textMatch)
     }
 } else {
-    throw "File '$Path' is not a supported archive (.zip or .scs) or text file (.sui)."
+    throw "File '$Path' is not a supported archive (.zip or .scs) or text file (.sii or .sui)."
 }
 
 if ($archiveFiles.Count -gt 1) {
