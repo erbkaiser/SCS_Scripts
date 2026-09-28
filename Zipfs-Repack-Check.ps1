@@ -7,7 +7,8 @@ Checks ZIPFS mod archives and tests repacking them as HashFS.
 .DESCRIPTION
 Scans a folder recursively or processes one .zip/.scs archive. It skips HashFS, unreadable,
 encrypted, and broken archives, extracts readable ZIPFS archives, then attempts a HashFS repack.
-The original is replaced only after a successful repack.
+Successful .zip conversions are written with a .scs extension. ZIPFS .scs inputs are replaced
+in place. Existing .scs destinations are not overwritten.
 
 Runs in dry-run mode by default. Use -ApplyFixes to replace archives; a .bak backup is created
 unless -NoBackup is specified. -WhatIf previews apply operations. Archive workers default to
@@ -90,7 +91,23 @@ if (-not $WorkerMode.IsPresent -and $files.Count -gt 1 -and $ThrottleLimit -gt 1
 
 foreach ($file in $files) {
     $archiveLock = Enter-ArchivePathLock -Path $file.FullName
+    $destinationLock = $null
     try {
+    $destinationPath = if ($file.Extension -eq '.zip') {
+        [System.IO.Path]::ChangeExtension($file.FullName, '.scs')
+    } else {
+        $file.FullName
+    }
+
+    if ($destinationPath -ne $file.FullName) {
+        $destinationLock = Enter-ArchivePathLock -Path $destinationPath
+        if (Test-Path -LiteralPath $destinationPath) {
+            Write-Host "Skipping ZIP conversion because the .scs destination already exists: $destinationPath" -ForegroundColor Yellow
+            $skippedCount++
+            continue
+        }
+    }
+
     $applyArchive = if ($WorkerMode.IsPresent) {
         $ApplyFixes.IsPresent
     } else {
@@ -130,7 +147,7 @@ foreach ($file in $files) {
 
         Expand-ZIPFSArchive -ArchivePath $file.FullName -DestinationPath $tempRoot -SevenZip $SevenZipExe
 
-        $tempOutput = Join-Path -Path $tempRoot -ChildPath ('repacked-' + [System.IO.Path]::GetFileName($file.Name))
+        $tempOutput = Join-Path -Path $tempRoot -ChildPath 'repacked-hashfs.scs'
         if (Test-Path -LiteralPath $tempOutput) {
             Remove-Item -LiteralPath $tempOutput -Force -ErrorAction SilentlyContinue -WhatIf:$false
         }
@@ -148,14 +165,22 @@ foreach ($file in $files) {
         if ($applyArchive) {
             Write-Host "Repack succeeded: $($file.Name)" -ForegroundColor Green
             if (-not $NoBackup.IsPresent) {
-                Copy-Item -LiteralPath $file.FullName -Destination "$($file.FullName).bak" -Force
+                Copy-Item -LiteralPath $file.FullName -Destination "$($file.FullName).bak" -Force -ErrorAction Stop
             }
-            Move-Item -LiteralPath $tempOutput -Destination $file.FullName -Force
+            Move-Item -LiteralPath $tempOutput -Destination $destinationPath -Force
+            if ($destinationPath -ne $file.FullName) {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+                Write-Host "Converted: $($file.FullName) -> $destinationPath" -ForegroundColor Green
+            }
             $replacedCount++
         }
         else {
             Write-Host "Repack succeeded: $($file.Name)" -ForegroundColor Green
-            Write-Host "Would replace: $($file.FullName)" -ForegroundColor Yellow
+            if ($destinationPath -ne $file.FullName) {
+                Write-Host "Would convert: $($file.FullName) -> $destinationPath" -ForegroundColor Yellow
+            } else {
+                Write-Host "Would replace: $($file.FullName)" -ForegroundColor Yellow
+            }
             $wouldReplaceCount++
         }
     }
@@ -170,6 +195,9 @@ foreach ($file in $files) {
         }
     }
     } finally {
+        if ($destinationLock) {
+            Exit-ArchivePathLock -Mutex $destinationLock
+        }
         Exit-ArchivePathLock -Mutex $archiveLock
     }
 }
