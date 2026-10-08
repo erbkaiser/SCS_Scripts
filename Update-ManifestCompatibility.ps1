@@ -169,6 +169,11 @@ function Invoke-ZIPArchive {
         [switch]$ApplyFixes
     )
 
+    if (Test-ZipArchiveEncrypted -Path $Archive.FullName) {
+        Write-Status "Skipping encrypted ZIP archive: $($Archive.Name)" -ForegroundColor Yellow
+        return $false
+    }
+
     $work = Join-Path $WorkRoot ([guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path $work -WhatIf:$false | Out-Null
     try {

@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 
-#Version: 2.1.0
+#Version: 1.0.0
 #Updated: 2026-09-28
 
 [CmdletBinding(SupportsShouldProcess = $True, ConfirmImpact = 'Medium')]
@@ -35,7 +35,7 @@ Param (
     [switch]$WorkerMode
 )
 
-Function Repair-ScsTrafficVariants {
+Function Repair-ScsTrafficVariantsHashFSv2 {
     <#
         .SYNOPSIS
         Repairs malformed traffic variant identifiers in ETS2/ATS unit definitions.
@@ -48,7 +48,8 @@ Function Repair-ScsTrafficVariants {
           - traffic_trailer
 
         Works on directories or on .scs/.zip archives. In archive mode it extracts to a temp folder,
-        repairs files, and repacks the archive if any changes were made.
+        repairs files, and attempts to repack modified archives as HashFSv2, falling back to ZIPFS
+        only if the HashFSv2 repack fails.
 
         By default it runs in dry-run mode and only reports findings. Use -ApplyFixes to write files.
         Archive workers default to four for folder input and one for a single archive; override with -ThrottleLimit.
@@ -190,6 +191,15 @@ Function Repair-ScsTrafficVariants {
                 if (-not $IsQuiet) { Write-Host "Skipping encrypted ZIP archive '$($InputItem.Name)'." -ForegroundColor Yellow }
                 return
             }
+            if ($InputItem.Extension -eq '.zip') {
+                $hashfsDestination = [System.IO.Path]::ChangeExtension($InputItem.FullName, '.scs')
+                if (Test-Path -LiteralPath $hashfsDestination) {
+                    if (-not $IsQuiet) { Write-Host "Skipping ZIP conversion because the .scs destination already exists: $hashfsDestination" -ForegroundColor Yellow }
+                    $Summary.SkippedArchives++
+                    Add-ArchiveReport -ArchivePath $InputItem.FullName -DefinitionCount 0 -ReferenceCount 0 -Outcome 'HashFS destination already exists; left unchanged'
+                    return
+                }
+            }
 
             $TempDir = Join-Path -Path $env:TEMP -ChildPath ([System.Guid]::NewGuid().ToString())
             $TempFolder = New-Item -ItemType Directory -Path $TempDir -Force -WhatIf:$false
@@ -210,11 +220,7 @@ Function Repair-ScsTrafficVariants {
                 if (-not $IsQuiet) {
                     Write-Host "Detected archive: $($InputItem.Name) [$archiveType]" -ForegroundColor DarkGray
                     Write-Host "Extracting to temporary folder..." -ForegroundColor Cyan
-                    if ($archiveType -eq 'zipfs') {
-                        Write-Host "Repack path: ZIPFS" -ForegroundColor DarkGray
-                    } else {
-                        Write-Host "Repack path: HashFS -> ZIP fallback if needed" -ForegroundColor DarkGray
-                    }
+                    Write-Host "Repack path: HashFSv2 -> ZIP fallback if needed" -ForegroundColor DarkGray
                 }
             } catch {
                 Remove-Item -Path $TempFolder.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
@@ -383,72 +389,56 @@ Function Repair-ScsTrafficVariants {
             }
 
             try {
-                if ($archiveType -eq 'zipfs') {
-                    $replacement = "$($OriginalArchivePath).new"
-                    if (Test-Path -LiteralPath $replacement) {
-                        Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue -WhatIf:$false
-                    }
-                    if (-not $IsQuiet) { Write-Host "Using ZIPFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray }
-                    New-ZIPFSArchive -SourceDirectory $WorkingPath.FullName -DestinationPath $replacement -SevenZip $SevenZipExe
-                    if (-not $NoBackup.IsPresent) {
-                        Copy-Item -LiteralPath $OriginalArchivePath -Destination "$OriginalArchivePath.bak" -Force -ErrorAction Stop
-                    }
-                    Move-Item -LiteralPath $replacement -Destination $OriginalArchivePath -Force
-                    if (-not $IsQuiet) { Write-Host -ForegroundColor Green "Successfully repacked ZIPFS archive: $($InputItem.Name)`n" }
-                    if (-not $IsQuiet) { Write-Host "Status: updated" -ForegroundColor Green }
-                    $Summary.ArchivesUpdated++
-                    $outcome = if ($ArchiveVerificationFailures -gt 0) { "updated; $ArchiveVerificationFailures definition(s) failed verification" } else { 'updated' }
-                    Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome $outcome
-                } else {
-                    try {
-                        $replacement = "$($OriginalArchivePath).zip.new"
-                        if (-not $IsQuiet) { Write-Host "Using HashFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray }
-                        if (Test-Path -LiteralPath $replacement) {
-                            Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue -WhatIf:$false
-                        }
-
-                        $repackResult = New-SCSArchiveWithFallback -SourceDirectory $WorkingPath.FullName -DestinationPath $replacement -Packer $PackerExe -SevenZip $SevenZipExe -AllowZIPFallback
-
-                        if (-not $NoBackup.IsPresent) {
-                            Copy-Item -LiteralPath $OriginalArchivePath -Destination "$OriginalArchivePath.bak" -Force -ErrorAction Stop
-                        }
-                        Move-Item -LiteralPath $replacement -Destination $OriginalArchivePath -Force
-                        $Summary.ArchivesUpdated++
-                        if ($repackResult.UsedFallback) {
-                            if (-not $IsQuiet) {
-                                Write-Host "HashFS repack failed; ZIP fallback succeeded for $($InputItem.Name)" -ForegroundColor Yellow
-                                Write-Host "Status: updated via ZIP fallback" -ForegroundColor Yellow
-                            }
-                            $Summary.ZipFallbackArchives++
-                        } else {
-                            if (-not $IsQuiet) { Write-Host "Status: updated" -ForegroundColor Green }
-                        }
-                        $outcome = if ($repackResult.UsedFallback) { 'updated via ZIP fallback' } else { 'updated' }
-                        if ($ArchiveVerificationFailures -gt 0) { $outcome += "; $ArchiveVerificationFailures definition(s) failed verification" }
-                        Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome $outcome
-                        if (-not $IsQuiet) { Write-Host -ForegroundColor Green "Successfully repacked HashFS archive as ZIP fallback: $($InputItem.Name)`n" }
-                    } catch {
-                        if (-not $IsQuiet) {
-                            Write-Host -ForegroundColor Yellow "HashFS archive detected: automatic repack failed for '$($InputItem.Name)'.`nThe original archive was left untouched.`n"
-                        } else {
-                            $AllProblems.Add([PSCustomObject]@{
-                                File = $InputItem.Name
-                                'Attribute/Class' = 'ArchiveRepackSkipped'
-                                Value = 'HashFS repack failed and ZIP fallback also failed'
-                            })
-                        }
-                        if (-not $IsQuiet) { Write-Host "Status: repack failed" -ForegroundColor Red }
-                        $Summary.FailedRepack++
-                        Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome 'repack failed; original left unchanged'
-                        Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
-                        return
-                    }
+                $replacement = "$($OriginalArchivePath).zip.new"
+                if (-not $IsQuiet) { Write-Host "Trying HashFSv2 repack for $($InputItem.Name)" -ForegroundColor DarkGray }
+                if (Test-Path -LiteralPath $replacement) {
+                    Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue -WhatIf:$false
                 }
+
+                $repackResult = New-SCSArchiveWithFallback -SourceDirectory $WorkingPath.FullName -DestinationPath $replacement -Packer $PackerExe -SevenZip $SevenZipExe -AllowZIPFallback
+
+                $destinationPath = if (-not $repackResult.UsedFallback -and $InputItem.Extension -eq '.zip') {
+                    [System.IO.Path]::ChangeExtension($OriginalArchivePath, '.scs')
+                } else {
+                    $OriginalArchivePath
+                }
+                if (-not $NoBackup.IsPresent) {
+                    Copy-Item -LiteralPath $OriginalArchivePath -Destination "$OriginalArchivePath.bak" -Force -ErrorAction Stop
+                }
+                Move-Item -LiteralPath $replacement -Destination $destinationPath -Force
+                if ($destinationPath -ne $OriginalArchivePath) {
+                    Remove-Item -LiteralPath $OriginalArchivePath -Force -ErrorAction Stop
+                }
+                $Summary.ArchivesUpdated++
+                if ($repackResult.UsedFallback) {
+                    if (-not $IsQuiet) {
+                        Write-Host "HashFSv2 repack failed; ZIP fallback succeeded for $($InputItem.Name)" -ForegroundColor Yellow
+                        Write-Host "Status: updated via ZIP fallback" -ForegroundColor Yellow
+                    }
+                    $Summary.ZipFallbackArchives++
+                } elseif (-not $IsQuiet) {
+                    Write-Host "Status: updated as HashFSv2" -ForegroundColor Green
+                }
+                $outcome = if ($repackResult.UsedFallback) { 'updated via ZIP fallback' } else { 'updated as HashFSv2' }
+                if ($destinationPath -ne $OriginalArchivePath) { $outcome = 'converted to HashFSv2 .scs' }
+                if ($ArchiveVerificationFailures -gt 0) { $outcome += "; $ArchiveVerificationFailures definition(s) failed verification" }
+                Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome $outcome
+                if (-not $IsQuiet) { Write-Host -ForegroundColor Green "Successfully repacked archive: $($InputItem.Name)`n" }
             } catch {
+                if (-not $IsQuiet) {
+                    Write-Host -ForegroundColor Yellow "HashFSv2 repack and ZIP fallback failed for '$($InputItem.Name)'.`nThe original archive was left untouched.`n"
+                } else {
+                    $AllProblems.Add([PSCustomObject]@{
+                        File = $InputItem.Name
+                        'Attribute/Class' = 'ArchiveRepackSkipped'
+                        Value = 'HashFSv2 repack failed and ZIP fallback also failed'
+                    })
+                }
+                if (-not $IsQuiet) { Write-Host "Status: repack failed" -ForegroundColor Red }
                 $Summary.FailedRepack++
                 Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome 'repack failed; original left unchanged'
-                if (-not $IsQuiet) { Write-Host "Status: repack failed" -ForegroundColor Red }
-                Write-Error "Failed to repack '$($InputItem.Name)'.`nError: $_"
+                Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
+                return
             } finally {
                 Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
             }
@@ -459,9 +449,16 @@ Function Repair-ScsTrafficVariants {
         param([System.IO.FileInfo]$ArchiveFile)
 
         $archiveLock = Enter-ArchivePathLock -Path $ArchiveFile.FullName
+        $destinationLock = $null
         try {
+            if ($ArchiveFile.Extension -eq '.zip') {
+                $destinationLock = Enter-ArchivePathLock -Path ([System.IO.Path]::ChangeExtension($ArchiveFile.FullName, '.scs'))
+            }
             Process-RootTarget -InputItem $ArchiveFile
         } finally {
+            if ($destinationLock) {
+                Exit-ArchivePathLock -Mutex $destinationLock
+            }
             Exit-ArchivePathLock -Mutex $archiveLock
         }
     }
@@ -603,5 +600,5 @@ Function Repair-ScsTrafficVariants {
 
 # Run when invoked directly
 if ($MyInvocation.InvocationName -ne '.') {
-    Repair-ScsTrafficVariants @PSBoundParameters
+    Repair-ScsTrafficVariantsHashFSv2 @PSBoundParameters
 }

@@ -186,14 +186,7 @@ function Invoke-ArchiveWorkerPool {
                     }
                 }
                 try {
-                    $capturedOutput = @(& {
-                        if ([System.IO.Path]::GetFileName($WorkerScriptPath) -eq 'Repair-Traffic-Variants.ps1') {
-                            . $WorkerScriptPath
-                            Repair-ScsTrafficVariants @WorkerArguments
-                        } else {
-                            & $WorkerScriptPath @WorkerArguments
-                        }
-                    } *>&1)
+                    $capturedOutput = @(& $WorkerScriptPath @WorkerArguments *>&1)
                     [PSCustomObject]@{
                         WorkerEnvelope = $true
                         Failed = $false

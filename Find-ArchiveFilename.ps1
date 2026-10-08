@@ -85,6 +85,10 @@ function Find-ArchiveEntry {
 
     $archiveKind = Get-SCSArchiveKind -Path $ArchivePath
     if ($archiveKind -eq 'ZIPFS') {
+        if (Test-ZipArchiveEncrypted -Path $ArchivePath) {
+            Write-Warning "Skipping encrypted ZIP archive: $ArchivePath"
+            return
+        }
         if (-not (Test-ZipArchiveReadable -Path $ArchivePath)) {
             throw "ZIPFS archive is unreadable: $ArchivePath"
         }
