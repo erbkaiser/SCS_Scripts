@@ -18,6 +18,6 @@ replace-sound-move.ps1:  Compares two folders with vehicle .sui files and copies
 
 Repair-Traffic-Variants-HashFSv2.ps1: § ¶ Combines functionality of Repair-Traffic-Variants and Zipfs-Repack-HashFS2 into one operation
 
-§ : requires helper .psm1 scripts to function
+§ : requires helper .psm1 scripts to function. Scripts run in test mode by default, use -ApplyFixes or -Apply or -Fix to edit archives
 
 ¶ : not covered by the Unlicense license. Copyright follows Rainbawz's implicit license
