@@ -1,5 +1,5 @@
-These scripts require scs_extractor.exe and scs_packer.exe to exist somewhere on your %PATH or their location must be manually provided with -ToolsFolder "C:\Tools" where that is the valid location.
-Available at https://modding.scssoft.com/wiki/Documentation/Tools/Game_Archive_Extractor & https://modding.scssoft.com/wiki/Documentation/Tools/Game_Archive_Packer
+These scripts require scs_packer.exe to exist somewhere on your %PATH or its location must be manually provided with -ToolsFolder "C:\Tools" where that is the valid location.
+Available at https://modding.scssoft.com/wiki/Documentation/Tools/Game_Archive_Packer
 
 Find-ArchiveFilename.ps1: § Searches loose files recursively when Path is a folder. It also searches the text
 contents of .sui files.
