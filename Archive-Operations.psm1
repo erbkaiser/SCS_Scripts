@@ -180,7 +180,7 @@ function Invoke-ArchiveTool {
         [string]$Tool,
         [string[]]$Arguments,
         [string]$WorkingDirectory,
-        [int]$TimeoutSeconds = 90
+        [int]$TimeoutSeconds = 300
     )
 
     if ([string]::IsNullOrWhiteSpace($Tool)) {
@@ -246,10 +246,10 @@ function Expand-HashFSArchive {
     param(
         [Parameter(Mandatory)][string]$ArchivePath,
         [Parameter(Mandatory)][string]$DestinationPath,
-        [Parameter(Mandatory)][string]$Extractor
+        [Parameter(Mandatory)][string]$Packer
     )
 
-    Invoke-ArchiveTool -Tool $Extractor -Arguments @($ArchivePath, $DestinationPath) -WorkingDirectory $DestinationPath
+    Invoke-ArchiveTool -Tool $Packer -Arguments @('extract', $ArchivePath, '-root', $DestinationPath) -WorkingDirectory $DestinationPath
 }
 
 function New-ZIPFSArchive {
@@ -308,4 +308,22 @@ function New-SCSArchiveWithFallback {
     return [PSCustomObject]@{ ArchiveKind = 'ZIPFS'; UsedFallback = $true }
 }
 
-Export-ModuleMember -Function Resolve-ArchiveToolPath, Get-SCSArchiveKind, Test-ZipArchiveEncrypted, Test-ZipArchiveReadable, Invoke-ArchiveTool, Expand-ZIPFSArchive, Expand-HashFSArchive, New-ZIPFSArchive, New-HashFSArchive, New-SCSArchiveWithFallback
+function Write-ArchiveStatus {
+    param(
+        [Parameter(Position = 0)][object]$Object,
+        [switch]$Quiet,
+        [System.ConsoleColor]$ForegroundColor,
+        [System.ConsoleColor]$BackgroundColor,
+        [switch]$NoNewline
+    )
+
+    if (-not $Quiet.IsPresent) {
+        $hostParameters = @{ Object = $Object }
+        if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $hostParameters.ForegroundColor = $ForegroundColor }
+        if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $hostParameters.BackgroundColor = $BackgroundColor }
+        if ($NoNewline.IsPresent) { $hostParameters.NoNewline = $true }
+        Write-Host @hostParameters
+    }
+}
+
+Export-ModuleMember -Function Resolve-ArchiveToolPath, Get-SCSArchiveKind, Test-ZipArchiveEncrypted, Test-ZipArchiveReadable, Invoke-ArchiveTool, Expand-ZIPFSArchive, Expand-HashFSArchive, New-ZIPFSArchive, New-HashFSArchive, New-SCSArchiveWithFallback, Write-ArchiveStatus

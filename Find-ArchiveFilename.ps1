@@ -121,11 +121,11 @@ function Find-ArchiveEntry {
         throw "Unsupported or unreadable archive '$ArchivePath' ($archiveKind)."
     }
 
-    $extractor = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_extractor.exe') -Required
+    $packer = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_packer.exe') -Required
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('archive-search-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
     try {
-        Expand-HashFSArchive -ArchivePath $ArchivePath -DestinationPath $tempRoot -Extractor $extractor
+        Expand-HashFSArchive -ArchivePath $ArchivePath -DestinationPath $tempRoot -Packer $packer
         foreach ($file in Get-ChildItem -LiteralPath $tempRoot -File -Recurse) {
             $relativePath = $file.FullName.Substring($tempRoot.Length).TrimStart([char[]]@('\', '/'))
             if ($file.Name.IndexOf($Query, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {

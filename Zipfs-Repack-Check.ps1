@@ -13,16 +13,18 @@ in place. Existing .scs destinations are not overwritten.
 Runs in dry-run mode by default. Use -ApplyFixes to replace archives; a .bak backup is created
 unless -NoBackup is specified. -WhatIf previews apply operations. Archive workers default to
 four for folder input and one for a single archive; override with -ThrottleLimit. Use -Silent
-(or -Q) to suppress status output.
+(or -Quiet or -Q) to suppress status output. Archive tools are resolved from the script folder
+by default, then from PATH.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
+    [Alias('Path', 'Root')]
     [string]$Folder = (Get-Location).Path,
-    [string]$ToolsFolder = (Get-Location).Path,
+    [string]$ToolsFolder = $PSScriptRoot,
     [Alias('Apply', 'Fix')]
     [switch]$ApplyFixes,
     [switch]$NoBackup,
-    [Alias('Q')]
+    [Alias('Quiet', 'Q')]
     [switch]$Silent,
     [Parameter(HelpMessage = 'Maximum simultaneous archive workers; defaults to four for folders and one for a single archive.')]
     [ValidateRange(0, 64)]
@@ -40,13 +42,7 @@ function Write-Status {
         [switch]$NoNewline
     )
 
-    if (-not $Quiet.IsPresent) {
-        $hostParameters = @{ Object = $Object }
-        if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $hostParameters.ForegroundColor = $ForegroundColor }
-        if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $hostParameters.BackgroundColor = $BackgroundColor }
-        if ($NoNewline.IsPresent) { $hostParameters.NoNewline = $true }
-        Write-Host @hostParameters
-    }
+    Write-ArchiveStatus @PSBoundParameters -Quiet:$Quiet.IsPresent
 }
 
 $parallelHelper = Join-Path $PSScriptRoot 'Archive-Parallelism.psm1'

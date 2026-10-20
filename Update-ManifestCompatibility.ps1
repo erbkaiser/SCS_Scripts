@@ -9,15 +9,16 @@ archives to the configured target version. Accepts a folder or one .scs/.zip arc
 Runs in dry-run mode by default. Use -ApplyFixes to repack changed archives; a .bak backup is
 created before replacement unless -NoBackup is specified. -WhatIf previews apply operations.
 Archive workers default to four for folder input and one for a single archive; override with
--ThrottleLimit. Use -Silent (or -Q) to suppress status output.
+-ThrottleLimit. Use -Silent, -Quiet, or -Q to suppress status output. Archive tools are resolved
+from the script folder by default, then from PATH.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
+    [Alias('Path', 'Root')]
     [string]$Folder = (Get-Location).Path,
-    [string]$ToolsFolder = (Get-Location).Path,
-    #[string]$ToolsFolder = C:\Tools,
+    [string]$ToolsFolder = $PSScriptRoot,
     [switch]$NoBackup,
-    [Alias('Q')]
+    [Alias('Quiet', 'Q')]
     [switch]$Silent,
     [Alias('Apply', 'Fix')]
     [switch]$ApplyFixes,
@@ -37,20 +38,14 @@ function Write-Status {
         [switch]$NoNewline
     )
 
-    if (-not $Quiet.IsPresent) {
-        $hostParameters = @{ Object = $Object }
-        if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $hostParameters.ForegroundColor = $ForegroundColor }
-        if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $hostParameters.BackgroundColor = $BackgroundColor }
-        if ($NoNewline.IsPresent) { $hostParameters.NoNewline = $true }
-        Write-Host @hostParameters
-    }
+    Write-ArchiveStatus @PSBoundParameters -Quiet:$Quiet.IsPresent
 }
 
 $parallelHelper = Join-Path $PSScriptRoot 'Archive-Parallelism.psm1'
 Import-Module -Name $parallelHelper -Force
 $archiveOperations = Join-Path $PSScriptRoot 'Archive-Operations.psm1'
 Import-Module -Name $archiveOperations -Force
-$version = '1.61'
+$version = '1.62'
 $previousVersion = ([decimal]$version - 0.01).ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture)
 #$previousVersion = '1.60'
 
@@ -129,16 +124,16 @@ function Update-Manifest {
 function Invoke-SCSArchive {
     param(
         [System.IO.FileInfo]$Archive,
-        [string]$Extractor,
         [string]$Packer,
         [string]$WorkRoot,
+        [switch]$NoBackup,
         [switch]$ApplyFixes
     )
 
     $work = Join-Path $WorkRoot ([guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path $work -WhatIf:$false | Out-Null
     try {
-        Expand-HashFSArchive -ArchivePath $Archive.FullName -DestinationPath $work -Extractor $Extractor
+        Expand-HashFSArchive -ArchivePath $Archive.FullName -DestinationPath $work -Packer $Packer
 
         $changed = @(Get-ChildItem -Path $work -Filter 'manifest.sii' -File -Recurse | ForEach-Object {
             Update-Manifest $_.FullName -ApplyFixes:$ApplyFixes.IsPresent
@@ -154,6 +149,9 @@ function Invoke-SCSArchive {
 
         $replacement = Join-Path $WorkRoot "$($Archive.Name).new"
         New-HashFSArchive -SourceDirectory $work -DestinationPath $replacement -Packer $Packer
+        if (-not $NoBackup.IsPresent) {
+            Copy-Item -LiteralPath $Archive.FullName -Destination "$($Archive.FullName).bak" -Force -ErrorAction Stop
+        }
         Move-Item -LiteralPath $replacement -Destination $Archive.FullName -Force
         return $true
     } finally {
@@ -166,6 +164,7 @@ function Invoke-ZIPArchive {
         [System.IO.FileInfo]$Archive,
         [string]$SevenZip,
         [string]$WorkRoot,
+        [switch]$NoBackup,
         [switch]$ApplyFixes
     )
 
@@ -193,6 +192,9 @@ function Invoke-ZIPArchive {
 
         $replacement = Join-Path $WorkRoot "$($Archive.Name).new"
         New-ZIPFSArchive -SourceDirectory $work -DestinationPath $replacement -SevenZip $SevenZip
+        if (-not $NoBackup.IsPresent) {
+            Copy-Item -LiteralPath $Archive.FullName -Destination "$($Archive.FullName).bak" -Force -ErrorAction Stop
+        }
         Move-Item -LiteralPath $replacement -Destination $Archive.FullName -Force
         return $true
     } finally {
@@ -200,8 +202,7 @@ function Invoke-ZIPArchive {
     }
 }
 
-$extractor = Join-Path $ToolsFolder 'scs_extractor.exe'
-$packer = Join-Path $ToolsFolder 'scs_packer.exe'
+$packer = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_packer.exe') -Required
 if (-not (Test-Path -LiteralPath $Folder)) {
     throw "Path '$Folder' does not exist."
 }
@@ -221,8 +222,6 @@ if ($archives.Count -eq 0) {
     throw 'This file must be run inside the ETS2 or ATS mod folder'
 }
 
-if (-not (Test-Path -LiteralPath $extractor -PathType Leaf)) { throw "Missing SCS extractor: $extractor" }
-if (-not (Test-Path -LiteralPath $packer -PathType Leaf)) { throw "Missing SCS packer: $packer" }
 $sevenZip = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('7z.exe', '7za.exe', '7z')
 
 $updatedCount = 0
@@ -272,26 +271,18 @@ try {
             $declinedCount++
             continue
         }
-        $backupPath = "$($archive.FullName).bak"
-        $backupCreated = $false
         try {
-            $bytes = [System.IO.File]::ReadAllBytes($archive.FullName)
-            $isSCS = $bytes.Length -ge 4 -and [System.Text.Encoding]::ASCII.GetString($bytes[0..3]) -eq 'SCS#'
-
-            if ($applyArchive -and -not $NoBackup) {
-                Copy-Item -LiteralPath $archive.FullName -Destination $backupPath -Force -ErrorAction Stop
-                $backupCreated = $true
-            }
+            $isSCS = (Get-SCSArchiveKind -Path $archive.FullName) -eq 'HashFS'
 
             $changed = $false
             if ($isSCS) {
                 try {
-                    $changed = Invoke-ZIPArchive $archive $sevenZip $workRoot -ApplyFixes:$applyArchive
+                    $changed = Invoke-ZIPArchive $archive $sevenZip $workRoot -NoBackup:$NoBackup.IsPresent -ApplyFixes:$applyArchive
                 } catch {
-                    $changed = Invoke-SCSArchive $archive $extractor $packer $workRoot -ApplyFixes:$applyArchive
+                    $changed = Invoke-SCSArchive $archive $packer $workRoot -NoBackup:$NoBackup.IsPresent -ApplyFixes:$applyArchive
                 }
             } else {
-                $changed = Invoke-ZIPArchive $archive $sevenZip $workRoot -ApplyFixes:$applyArchive
+                $changed = Invoke-ZIPArchive $archive $sevenZip $workRoot -NoBackup:$NoBackup.IsPresent -ApplyFixes:$applyArchive
             }
 
             if ($changed) {
@@ -305,15 +296,9 @@ try {
             } else {
                 $skippedCount++
                 Write-Status "Skipped: $($archive.Name)"
-                if ($backupCreated) {
-                    Remove-Item -LiteralPath $backupPath -Force
-                }
             }
         } catch {
             $unreadableCount++
-            if ($backupCreated) {
-                Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
-            }
             Write-Status "Could not read: $($archive.Name) ($($_.Exception.Message))"
         }
         } finally {

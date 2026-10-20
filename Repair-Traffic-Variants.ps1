@@ -15,7 +15,7 @@ Param (
     [string[]]$Attribute,
 
     [Parameter(Position = 2)]
-    [string]$ToolsFolder = (Get-Location).Path,
+    [string]$ToolsFolder = $PSScriptRoot,
 
     [Alias('Apply', 'Fix')]
     [switch]$ApplyFixes,
@@ -68,7 +68,7 @@ Function Repair-ScsTrafficVariants {
         [string[]]$Attribute,
 
         [Parameter(Position = 2)]
-        [string]$ToolsFolder = (Get-Location).Path,
+        [string]$ToolsFolder = $PSScriptRoot,
 
         [Alias('Apply', 'Fix')]
         [switch]$ApplyFixes,
@@ -107,7 +107,6 @@ Function Repair-ScsTrafficVariants {
     if ([string]::IsNullOrEmpty($ScriptDir)) { $ScriptDir = Split-Path -Path $MyInvocation.PSCommandPath -Parent }
     if ([string]::IsNullOrEmpty($ScriptDir)) { $ScriptDir = Get-Location }
 
-    $ExtractorExe = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_extractor.exe')
     $PackerExe    = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_packer.exe')
     $SevenZipExe  = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('7z.exe', '7za.exe', '7z')
 
@@ -199,10 +198,10 @@ Function Repair-ScsTrafficVariants {
                     Expand-ZIPFSArchive -ArchivePath $InputItem.FullName -DestinationPath $TempFolder.FullName -SevenZip $SevenZipExe
                     $UsesZipFallback = $true
                 } else {
-                    if (-not [string]::IsNullOrEmpty($ExtractorExe)) {
-                        Expand-HashFSArchive -ArchivePath $InputItem.FullName -DestinationPath $TempFolder.FullName -Extractor $ExtractorExe
+                    if (-not [string]::IsNullOrEmpty($PackerExe)) {
+                        Expand-HashFSArchive -ArchivePath $InputItem.FullName -DestinationPath $TempFolder.FullName -Packer $PackerExe
                     } else {
-                        throw "scs_extractor.exe not found."
+                        throw "scs_packer.exe not found."
                     }
                 }
 
