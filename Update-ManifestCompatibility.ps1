@@ -1,3 +1,5 @@
+#Requires -Version 5.1
+
 <#
 .SYNOPSIS
 Updates manifest compatibility versions in ATS/ETS2 mod archives.
@@ -6,14 +8,16 @@ Updates manifest compatibility versions in ATS/ETS2 mod archives.
 Finds compatible_versions entries for the previous game version and updates ZIPFS or HashFS
 archives to the configured target version. Accepts a folder or one .scs/.zip archive.
 
-Runs in dry-run mode by default. Use -ApplyFixes to repack changed archives; a .bak backup is
-created before replacement unless -NoBackup is specified. -WhatIf previews apply operations.
-Archive workers default to four for folder input and one for a single archive; override with
--ThrottleLimit. Use -Silent, -Quiet, or -Q to suppress status output. Archive tools are resolved
-from the script folder by default, then from PATH.
+Runs in dry-run mode by default. Use -ApplyFixes to repack changed archives; a .bak backup is created before replacement unless -NoBackup is specified. -WhatIf previews apply operations.
+Archive workers default to four for folder input and one for a single archive; override with -ThrottleLimit.
+Use -Silent, -Quiet, or -Q to suppress status output. Archive tools are resolved from the script folder by default, then from PATH.
+Use -Version or -V to select the target game version; defaults to 1.62. Use -PreviousVersion or -Prev to override the previous version; by default it is 0.01 below the target version.
 #>
-[CmdletBinding(SupportsShouldProcess)]
 param(
+    [Alias('V')][string]$Version = '1.62',
+    [Alias('Prev')]
+    [string]$PreviousVersion,
+    [switch]$WhatIf,
     [Alias('Path', 'Root')]
     [string]$Folder = (Get-Location).Path,
     [string]$ToolsFolder = $PSScriptRoot,
@@ -45,15 +49,20 @@ $parallelHelper = Join-Path $PSScriptRoot 'Archive-Parallelism.psm1'
 Import-Module -Name $parallelHelper -Force
 $archiveOperations = Join-Path $PSScriptRoot 'Archive-Operations.psm1'
 Import-Module -Name $archiveOperations -Force
-$version = '1.62'
-$previousVersion = ([decimal]$version - 0.01).ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture)
-#$previousVersion = '1.60'
 
-if (($version -notmatch '^\d+\.\d{2}$') -or ($previousVersion -notmatch '^\d+\.\d{2}$')) {
-    throw '$version must use the major.minor format, for example 1.61'
+if ($Version -notmatch '^\d+\.\d{2}$') {
+    throw '$version must use the major.minor format, for example 1.62'
 }
 
-if ($version -eq $previousVersion -or [decimal]$version -lt [decimal]$previousVersion) {
+if (-not $PSBoundParameters.ContainsKey('PreviousVersion')) {
+    $PreviousVersion = ([decimal]$Version - 0.01).ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+if ($PreviousVersion -notmatch '^\d+\.\d{2}$') {
+    throw '$previousVersion must use the major.minor format, for example 1.62'
+}
+
+if ($Version -eq $PreviousVersion -or [decimal]$Version -lt [decimal]$PreviousVersion) {
     throw '$version must be newer than $previousVersion'
 }
 
@@ -66,8 +75,8 @@ function Get-ManifestChanges {
     }
 
     $activeCompatibility = @($lines | Where-Object { $_ -match '^\s*compatible_versions\[\]' })
-    $previousPattern = [regex]::Escape($previousVersion)
-    $targetPattern = [regex]::Escape($version)
+    $previousPattern = [regex]::Escape($PreviousVersion)
+    $targetPattern = [regex]::Escape($Version)
     $previousLinePattern = '^\s*compatible_versions\[\]\s*:\s*"' + $previousPattern + '\.\*"\s*$'
     $targetLinePattern = '^\s*compatible_versions\[\]\s*:\s*"' + $targetPattern + '\.\*"\s*$'
     $activePrevious = @($lines | Where-Object { $_ -match $previousLinePattern })
@@ -81,7 +90,7 @@ function Get-ManifestChanges {
         for ($index = 0; $index -lt $lines.Count; $index++) {
             if ($lines[$index] -match ('^(\s*)compatible_versions\[\]\s*:\s*"' + $previousPattern + '\.\*"\s*$')) {
                 $indent = $Matches[1]
-                $lines[$index] = '{0}#compatible_versions[]: "{1}.*"' -f $indent, $previousVersion
+                $lines.Insert($index + 1, ('{0}compatible_versions[]: "{1}.*"' -f $indent, $Version))
                 break
             }
         }
@@ -98,7 +107,7 @@ function Get-ManifestChanges {
         }
 
         $indent = ([regex]::Match($lines[$insertAt - 1], '^\s*')).Value
-        $lines.Insert($insertAt, '{0}compatible_versions[]: "{1}.*"' -f $indent, $version)
+        $lines.Insert($insertAt, ('{0}compatible_versions[]: "{1}.*"' -f $indent, $Version))
     }
 
     return $lines.ToArray()
@@ -202,7 +211,7 @@ function Invoke-ZIPArchive {
     }
 }
 
-$packer = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_packer.exe') -Required
+$packer = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_packer.exe')
 if (-not (Test-Path -LiteralPath $Folder)) {
     throw "Path '$Folder' does not exist."
 }
@@ -222,6 +231,13 @@ if ($archives.Count -eq 0) {
     throw 'This file must be run inside the ETS2 or ATS mod folder'
 }
 
+foreach ($archive in $archives) {
+    if ((Get-SCSArchiveKind -Path $archive.FullName) -eq 'HashFS') {
+        $packer = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_packer.exe') -Required
+        break
+    }
+}
+
 $sevenZip = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('7z.exe', '7za.exe', '7z')
 
 $updatedCount = 0
@@ -231,11 +247,11 @@ $unreadableCount = 0
 $declinedCount = 0
 
 if (-not $WorkerMode.IsPresent -and $archives.Count -gt 1 -and $ThrottleLimit -gt 1) {
-    $workerParameters = @{ ToolsFolder = $ToolsFolder }
+    $workerParameters = @{ ToolsFolder = $ToolsFolder; Version = $Version; PreviousVersion = $PreviousVersion }
     if ($NoBackup.IsPresent) { $workerParameters.NoBackup = $true }
     if ($Quiet.IsPresent) { $workerParameters.Silent = $true }
     Write-Status "Processing $($archives.Count) archives with up to $ThrottleLimit workers.`n" -ForegroundColor Cyan
-    $workerBatch = Invoke-ArchiveWorkerBatch -ScriptPath $PSCommandPath -ArchivePaths @($archives | ForEach-Object { $_.FullName }) -WorkerParameters $workerParameters -Operation 'Replace archive with updated manifest' -ThrottleLimit $ThrottleLimit -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIfPreference
+    $workerBatch = Invoke-ArchiveWorkerBatch -ScriptPath $PSCommandPath -ArchivePaths @($archives | ForEach-Object { $_.FullName }) -WorkerParameters $workerParameters -Operation 'Replace archive with updated manifest' -ThrottleLimit $ThrottleLimit -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIf.IsPresent
     $declinedCount += $workerBatch.DeclinedPaths.Count
 
     foreach ($worker in $workerBatch.Results) {
@@ -251,7 +267,9 @@ if (-not $WorkerMode.IsPresent -and $archives.Count -gt 1 -and $ThrottleLimit -g
         }
     }
 
-    Microsoft.PowerShell.Utility\Write-Host "Summary: $updatedCount updated, $wouldUpdateCount would update, $skippedCount skipped, $unreadableCount could not be read, $declinedCount declined."
+    if (-not $Quiet.IsPresent) {
+        Microsoft.PowerShell.Utility\Write-Host "Summary: $updatedCount updated, $wouldUpdateCount would update, $skippedCount skipped, $unreadableCount could not be read, $declinedCount declined."
+    }
     return
 }
 
@@ -262,45 +280,41 @@ try {
     foreach ($archive in $archives) {
         $archiveLock = Enter-ArchivePathLock -Path $archive.FullName
         try {
-        $applyArchive = if ($WorkerMode.IsPresent) {
-            $ApplyFixes.IsPresent
-        } else {
-            Test-ArchiveOperationApproval -Target $archive.FullName -Operation 'Replace archive with updated manifest' -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIfPreference
-        }
-        if ($ApplyFixes.IsPresent -and -not $applyArchive -and -not $WhatIfPreference) {
-            $declinedCount++
-            continue
-        }
-        try {
-            $isSCS = (Get-SCSArchiveKind -Path $archive.FullName) -eq 'HashFS'
+            $applyArchive = if ($WorkerMode.IsPresent) {
+                $ApplyFixes.IsPresent
+            } else {
+                Test-ArchiveOperationApproval -Target $archive.FullName -Operation 'Replace archive with updated manifest' -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIf.IsPresent
+            }
+            if ($ApplyFixes.IsPresent -and -not $applyArchive -and -not $WhatIf.IsPresent) {
+                $declinedCount++
+                continue
+            }
+            try {
+                $isSCS = (Get-SCSArchiveKind -Path $archive.FullName) -eq 'HashFS'
 
-            $changed = $false
-            if ($isSCS) {
-                try {
-                    $changed = Invoke-ZIPArchive $archive $sevenZip $workRoot -NoBackup:$NoBackup.IsPresent -ApplyFixes:$applyArchive
-                } catch {
+                $changed = $false
+                if ($isSCS) {
                     $changed = Invoke-SCSArchive $archive $packer $workRoot -NoBackup:$NoBackup.IsPresent -ApplyFixes:$applyArchive
-                }
-            } else {
-                $changed = Invoke-ZIPArchive $archive $sevenZip $workRoot -NoBackup:$NoBackup.IsPresent -ApplyFixes:$applyArchive
-            }
-
-            if ($changed) {
-                if ($applyArchive) {
-                    $updatedCount++
-                    Write-Status "Updated: $($archive.Name)"
                 } else {
-                    $wouldUpdateCount++
-                    Write-Status "Would update: $($archive.FullName)" -ForegroundColor Yellow
+                    $changed = Invoke-ZIPArchive $archive $sevenZip $workRoot -NoBackup:$NoBackup.IsPresent -ApplyFixes:$applyArchive
                 }
-            } else {
-                $skippedCount++
-                Write-Status "Skipped: $($archive.Name)"
+
+                if ($changed) {
+                    if ($applyArchive) {
+                        $updatedCount++
+                        Write-Status "Updated: $($archive.Name)"
+                    } else {
+                        $wouldUpdateCount++
+                        Write-Status "Would update: $($archive.FullName)" -ForegroundColor Yellow
+                    }
+                } else {
+                    $skippedCount++
+                    Write-Status "Skipped: $($archive.Name)"
+                }
+            } catch {
+                $unreadableCount++
+                Write-Status "Could not read: $($archive.Name) ($($_.Exception.Message))"
             }
-        } catch {
-            $unreadableCount++
-            Write-Status "Could not read: $($archive.Name) ($($_.Exception.Message))"
-        }
         } finally {
             Exit-ArchivePathLock -Mutex $archiveLock
         }
@@ -321,4 +335,6 @@ if ($WorkerMode.IsPresent) {
     return
 }
 
-Microsoft.PowerShell.Utility\Write-Host "Summary: $updatedCount updated, $wouldUpdateCount would update, $skippedCount skipped, $unreadableCount could not be read, $declinedCount declined."
+if (-not $Quiet.IsPresent) {
+    Microsoft.PowerShell.Utility\Write-Host "Summary: $updatedCount updated, $wouldUpdateCount would update, $skippedCount skipped, $unreadableCount could not be read, $declinedCount declined."
+}

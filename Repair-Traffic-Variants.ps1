@@ -1,91 +1,72 @@
 #Requires -Version 5.1
 
-#Version: 2.1.0
-#Updated: 2026-09-28
+<#
+    .SYNOPSIS
+    Repairs malformed traffic variant identifiers in ETS2/ATS unit definitions.
+
+    .DESCRIPTION
+    Corrects invalid leading-dot prefixes in:
+      - variant[]
+      - slave_trailer
+      - traffic_vehicle
+      - traffic_trailer
+
+    Works on directories or on .scs/.zip archives. In archive mode it extracts to a temp folder,
+    repairs files, and repacks the archive if any changes were made. In folder mode it scans recursively under the root path and repairs files in place.
+
+    By default it runs in dry-run mode and only reports findings. Use -ApplyFixes to write files.
+    Archive workers default to four for folder input and one for a single archive; override with -ThrottleLimit.
+#>
 
 [CmdletBinding(SupportsShouldProcess = $True, ConfirmImpact = 'Medium')]
-Param (
+param(
     [Parameter(Position = 0)]
     [Alias('Path', 'Root', 'Folder')]
-    [string[]]$RootPath,
-
+    [string[]] $RootPath,
     [Parameter(Position = 1)]
     [ValidateSet('variant', 'slave_trailer', 'traffic_vehicle', 'traffic_trailer')]
     [Alias('Repair', 'Attrib')]
-    [string[]]$Attribute,
-
+    [string[]] $Attribute,
     [Parameter(Position = 2)]
-    [string]$ToolsFolder = $PSScriptRoot,
-
+    [string] $ToolsFolder = $PSScriptRoot,
     [Alias('Apply', 'Fix')]
-    [switch]$ApplyFixes,
-
-    [switch]$NoBackup,
-
+    [switch] $ApplyFixes,
+    [switch] $NoBackup,
     [Alias('Full')]
-    [switch]$FullScan,
-
+    [switch] $FullScan,
     [Alias('Silent', 'Q')]
-    [switch]$Quiet,
-
+    [switch] $Quiet,
     [Parameter(HelpMessage = 'Maximum simultaneous archive workers; defaults to four for folders and one for a single archive.')]
     [ValidateRange(0, 64)]
-    [int]$ThrottleLimit = 0,
-
-    [switch]$WorkerMode
+    [int] $ThrottleLimit = 0,
+    [switch] $WorkerMode
 )
 
-Function Repair-ScsTrafficVariants {
-    <#
-        .SYNOPSIS
-        Repairs malformed traffic variant identifiers in ETS2/ATS unit definitions.
-
-        .DESCRIPTION
-        Corrects invalid leading-dot prefixes in:
-          - variant[]
-          - slave_trailer
-          - traffic_vehicle
-          - traffic_trailer
-
-        Works on directories or on .scs/.zip archives. In archive mode it extracts to a temp folder,
-        repairs files, and repacks the archive if any changes were made.
-
-        By default it runs in dry-run mode and only reports findings. Use -ApplyFixes to write files.
-        Archive workers default to four for folder input and one for a single archive; override with -ThrottleLimit.
-    #>
-
+function Repair-ScsTrafficVariants {
     [CmdletBinding(SupportsShouldProcess = $True, ConfirmImpact = 'Medium')]
     [OutputType([Void], [PSCustomObject[]])]
 
-    Param (
+    param(
         [Parameter(Mandatory, Position = 0)]
         [Alias('Path', 'Root', 'Folder')]
-        [string[]]$RootPath,
-
+        [string[]] $RootPath,
         [Parameter(Position = 1)]
         [ValidateSet('variant', 'slave_trailer', 'traffic_vehicle', 'traffic_trailer')]
         [Alias('Repair', 'Attrib')]
-        [string[]]$Attribute,
-
+        [string[]] $Attribute,
         [Parameter(Position = 2)]
-        [string]$ToolsFolder = $PSScriptRoot,
-
+        [string] $ToolsFolder = $PSScriptRoot,
         [Alias('Apply', 'Fix')]
-        [switch]$ApplyFixes,
-
-        [switch]$NoBackup,
-
+        [switch] $ApplyFixes,
+        [switch] $NoBackup,
         [Alias('Full')]
-        [switch]$FullScan,
-
+        [switch] $FullScan,
         [Alias('Silent', 'Q')]
-        [switch]$Quiet,
-
+        [switch] $Quiet,
         [Parameter(HelpMessage = 'Maximum simultaneous archive workers; defaults to four for folders and one for a single archive.')]
         [ValidateRange(0, 64)]
-        [int]$ThrottleLimit = 0,
-
-        [switch]$WorkerMode
+        [int] $ThrottleLimit = 0,
+        [switch] $WorkerMode
     )
 
     $IsQuiet = $Quiet.IsPresent
@@ -95,31 +76,59 @@ Function Repair-ScsTrafficVariants {
     Import-Module -Name $archiveOperations -Force
 
     if ($Attribute.Count -eq 0) {
-        $TargetAttributes = @('variant', 'slave_trailer', 'traffic_vehicle', 'traffic_trailer')
+        $TargetAttributes = @(
+            'variant',
+            'slave_trailer',
+            'traffic_vehicle',
+            'traffic_trailer'
+        )
     } else {
-        $TargetAttributes = ($Attribute | ForEach-Object { $_.ToLower() }) | Select-Object -Unique
+        $TargetAttributes = (
+            $Attribute | ForEach-Object {
+                $_.ToLower()
+            }
+        )
+            | Select-Object -Unique
     }
 
     # Resolve tool paths
     $ScriptDir = $PSScriptRoot
-    if ([string]::IsNullOrEmpty($ScriptDir)) { $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path -Parent }
-    if ([string]::IsNullOrEmpty($ScriptDir)) { $ScriptDir = Split-Path -Path (Get-Item -Path $MyInvocation.InvocationName).FullName -Parent }
-    if ([string]::IsNullOrEmpty($ScriptDir)) { $ScriptDir = Split-Path -Path $MyInvocation.PSCommandPath -Parent }
-    if ([string]::IsNullOrEmpty($ScriptDir)) { $ScriptDir = Get-Location }
+    if ([string]::IsNullOrEmpty($ScriptDir)) {
+        $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path -Parent
+    }
+    if ([string]::IsNullOrEmpty($ScriptDir)) {
+        $ScriptDir = Split-Path -Path (
+            Get-Item -Path $MyInvocation.InvocationName
+        ).FullName -Parent
+    }
+    if ([string]::IsNullOrEmpty($ScriptDir)) {
+        $ScriptDir = Split-Path -Path $MyInvocation.PSCommandPath -Parent
+    }
+    if ([string]::IsNullOrEmpty($ScriptDir)) {
+        $ScriptDir = Get-Location
+    }
 
-    $PackerExe    = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('scs_packer.exe')
-    $SevenZipExe  = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @('7z.exe', '7za.exe', '7z')
+    $PackerExe = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @(
+        'scs_packer.exe'
+    )
+    $SevenZipExe = Resolve-ArchiveToolPath -ToolsFolder $ToolsFolder -Names @(
+        '7z.exe',
+        '7za.exe',
+        '7z'
+    )
 
     $Patterns = @{
-        'variant'         = [Regex]::New('(?<=variant\[\][ \t]*:[ \t]*)\.[^\s]+', 520)
-        'slave_trailer'   = [Regex]::New('(?<=slave_trailer[ \t]*:[ \t]*)\.[^\s]+', 520)
-        'traffic_vehicle' = [Regex]::New('(?<=traffic_vehicle[ \t]*:[ \t]*)\.[^\s]+', 520)
-        'traffic_trailer' = [Regex]::New('(?<=traffic_trailer[ \t]*:[ \t]*)\.[^\s]+', 520)
-        'LeadingDot'      = [Regex]::New('^\.', 520)
+        'variant' = [Regex]::New( '(?<=variant\[\][ \t]*:[ \t]*)\.[^\s]+', 520 )
+        'slave_trailer' = [Regex]::New( '(?<=slave_trailer[ \t]*:[ \t]*)\.[^\s]+', 520 )
+        'traffic_vehicle' =
+            [Regex]::New( '(?<=traffic_vehicle[ \t]*:[ \t]*)\.[^\s]+', 520 )
+        'traffic_trailer' =
+            [Regex]::New( '(?<=traffic_trailer[ \t]*:[ \t]*)\.[^\s]+', 520 )
+        'LeadingDot' = [Regex]::New( '^\.', 520 )
     }
 
     $AllProblems = [System.Collections.Generic.List[PSCustomObject]]::new()
-    $Summary = [PSCustomObject]@{
+    $Summary = [PSCustomObject] @{
         UnitFilesRepaired = 0
         ArchivesUpdated = 0
         ZipFallbackArchives = 0
@@ -134,30 +143,29 @@ Function Repair-ScsTrafficVariants {
 
     function Add-ArchiveReport {
         param(
-            [string]$ArchivePath,
-            [int]$DefinitionCount,
-            [int]$ReferenceCount,
-            [string]$Outcome
+            [string] $ArchivePath,
+            [int] $DefinitionCount,
+            [int] $ReferenceCount,
+            [string] $Outcome
         )
 
-        $Summary.ArchiveReports.Add([PSCustomObject]@{
-            ArchivePath = $ArchivePath
-            DefinitionCount = $DefinitionCount
-            ReferenceCount = $ReferenceCount
-            Outcome = $Outcome
-        })
+        $Summary.ArchiveReports.Add(
+            [PSCustomObject] @{
+                ArchivePath = $ArchivePath
+                DefinitionCount = $DefinitionCount
+                ReferenceCount = $ReferenceCount
+                Outcome = $Outcome
+            }
+        )
     }
 
-    $PathSuffix = if ($FullScan.IsPresent) { '' } else { '\def' }
-
-    function Process-RootTarget {
+    function Invoke-RootTarget {
         param(
-            [System.IO.FileSystemInfo]$InputItem
+            [System.IO.FileSystemInfo] $InputItem
         )
 
         $WorkingPath = $InputItem
         $IsArchive = $false
-        $UsesZipFallback = $false
         $AnyRepairs = $false
         $AnyAppliedRepairs = $false
         $OriginalArchivePath = $null
@@ -167,7 +175,7 @@ Function Repair-ScsTrafficVariants {
         $ArchiveVerificationFailures = 0
 
         if ($InputItem -is [System.IO.FileInfo]) {
-            if ($InputItem.Extension -notin '.scs', '.zip') {
+            if ( $InputItem.Extension -notin '.scs', '.zip' ) {
                 Write-Error "The path '$($InputItem.FullName)' is not a directory or a supported archive file (.scs or .zip)."
                 return
             }
@@ -182,21 +190,34 @@ Function Repair-ScsTrafficVariants {
                 Write-Error "Cannot read '$($InputItem.Name)'. Aborting without modifying the original file."
                 return
             }
-            $archiveType = if ($InputItem.Extension -eq '.zip' -or $detectedKind -ne 'HashFS') { 'zipfs' } else { 'hashfs' }
-            if ($archiveType -eq 'zipfs' -and (Test-ZipArchiveEncrypted -Path $InputItem.FullName)) {
+            $archiveType = if (
+                $InputItem.Extension -eq '.zip' -or $detectedKind -ne 'HashFS'
+            ) {
+                'zipfs'
+            } else {
+                'hashfs'
+            }
+            if (
+                $archiveType -eq 'zipfs' -and (
+                    Test-ZipArchiveEncrypted -Path $InputItem.FullName
+                )
+            ) {
                 $Summary.SkippedArchives++
                 Add-ArchiveReport -ArchivePath $InputItem.FullName -DefinitionCount 0 -ReferenceCount 0 -Outcome 'encrypted ZIP archive; skipped'
-                if (-not $IsQuiet) { Write-Host "Skipping encrypted ZIP archive '$($InputItem.Name)'." -ForegroundColor Yellow }
+                if (-not $IsQuiet) {
+                    Write-Host "Skipping encrypted ZIP archive '$($InputItem.Name)'." -ForegroundColor Yellow
+                }
                 return
             }
 
-            $TempDir = Join-Path -Path $env:TEMP -ChildPath ([System.Guid]::NewGuid().ToString())
+            $TempDir = Join-Path -Path $env:TEMP -ChildPath (
+                [System.Guid]::NewGuid().ToString()
+            )
             $TempFolder = New-Item -ItemType Directory -Path $TempDir -Force -WhatIf:$false
 
             try {
                 if ($archiveType -eq 'zipfs') {
                     Expand-ZIPFSArchive -ArchivePath $InputItem.FullName -DestinationPath $TempFolder.FullName -SevenZip $SevenZipExe
-                    $UsesZipFallback = $true
                 } else {
                     if (-not [string]::IsNullOrEmpty($PackerExe)) {
                         Expand-HashFSArchive -ArchivePath $InputItem.FullName -DestinationPath $TempFolder.FullName -Packer $PackerExe
@@ -231,12 +252,16 @@ Function Repair-ScsTrafficVariants {
 
         if (-not (Test-Path -Path $ScanRoot)) {
             if ($IsArchive) {
-                if (-not $IsQuiet) { Write-Host -ForegroundColor Yellow "No def directory found under archive '$($InputItem.Name)'. Cleaning up temporary extraction folder." }
+                if (-not $IsQuiet) {
+                    Write-Host -ForegroundColor Yellow "No def directory found under archive '$($InputItem.Name)'. Cleaning up temporary extraction folder."
+                }
                 $Summary.SkippedArchives++
                 Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount 0 -ReferenceCount 0 -Outcome 'no definition directory found; skipped'
                 Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
             } else {
-                if (-not $IsQuiet) { Write-Host -ForegroundColor Yellow "No def directory found under '$($WorkingPath.FullName)'. Skipping." }
+                if (-not $IsQuiet) {
+                    Write-Host -ForegroundColor Yellow "No def directory found under '$($WorkingPath.FullName)'. Skipping."
+                }
             }
             return
         }
@@ -249,71 +274,99 @@ Function Repair-ScsTrafficVariants {
 
             foreach ($Attrib in $TargetAttributes) {
                 if ($Patterns[$Attrib].IsMatch($Content)) {
-                    $Matches = @($Patterns[$Attrib].Matches($Content).Value)
-                    $MalformedValues[$Attrib] = [System.Collections.Generic.List[string]]::new()
-                    foreach ($MatchValue in $Matches) {
+                    $MatchedValues = @($Patterns[$Attrib].Matches($Content).Value)
+                    $MalformedValues[
+                        $Attrib
+                    ] = [System.Collections.Generic.List[string]]::new()
+                    foreach ($MatchValue in $MatchedValues) {
                         $MalformedValues[$Attrib].Add($MatchValue)
                     }
-                    $MalformedValues['Total'] += $Matches.Count
+                    $MalformedValues['Total'] += $MatchedValues.Count
                 }
             }
 
-            if ($MalformedValues['Total'] -eq 0) { continue }
+            if ($MalformedValues['Total'] -eq 0) {
+                continue
+            }
 
-            $RelativePath = $UnitFile.FullName.Substring($WorkingPath.FullName.Length).TrimStart('\', '/')
-            $RelativePath = $RelativePath -replace [regex]::Escape([System.IO.Path]::DirectorySeparatorChar), '/'
+            $RelativePath = $UnitFile.FullName.Substring(
+                $WorkingPath.FullName.Length
+            ).TrimStart( '\', '/' )
+            $RelativePath = $RelativePath -replace [regex]::Escape(
+                [System.IO.Path]::DirectorySeparatorChar
+            ), '/'
 
             $FileProblems = [System.Collections.Generic.List[PSCustomObject]]::new()
 
             foreach ($Attrib in $TargetAttributes) {
-                if (-not $MalformedValues.ContainsKey($Attrib)) { continue }
+                if (-not $MalformedValues.ContainsKey($Attrib)) {
+                    continue
+                }
                 foreach ($Value in $MalformedValues[$Attrib]) {
-                    $AllProblems.Add([PSCustomObject]@{
-                        File = $RelativePath
-                        'Attribute/Class' = $Attrib
-                        Value = $Value
-                    })
-                    $FileProblems.Add([PSCustomObject]@{
-                        'Attribute/Class' = $Attrib
-                        Value = $Value
-                    })
+                    $AllProblems.Add(
+                        [PSCustomObject] @{
+                            File = $RelativePath
+                            'Attribute/Class' = $Attrib
+                            Value = $Value
+                        }
+                    )
+                    $FileProblems.Add(
+                        [PSCustomObject] @{ 'Attribute/Class' = $Attrib; Value = $Value }
+                    )
                 }
             }
 
             if (-not $IsQuiet -and -not $IsArchive) {
                 Write-Host $InputItem.BaseName -ForegroundColor DarkGray
                 Write-Host " > $RelativePath" -ForegroundColor White
-                Write-Host ($FileProblems | Format-Table -Property 'Attribute/Class', 'Value' -AutoSize | Out-String) -ForegroundColor Red
+                Write-Host (
+                    $FileProblems | Format-Table -Property 'Attribute/Class',
+                    'Value' -AutoSize | Out-String
+                ) -ForegroundColor Red
             }
 
             $NewContent = $Content
 
             foreach ($Attrib in $TargetAttributes) {
-                if (-not $MalformedValues.ContainsKey($Attrib)) { continue }
+                if (-not $MalformedValues.ContainsKey($Attrib)) {
+                    continue
+                }
 
                 foreach ($Value in $MalformedValues[$Attrib]) {
-                    $FixedValue = $Patterns['LeadingDot'].Replace($Value, '')
-                    $NewContent = [Regex]::Replace($NewContent, [Regex]::Escape($Value), $FixedValue)
+                    $FixedValue = $Patterns['LeadingDot'].Replace( $Value, '' )
+                    $NewContent = [Regex]::Replace(
+                        $NewContent,
+                        [Regex]::Escape($Value),
+                        $FixedValue
+                    )
                 }
             }
 
             if ($NewContent -eq $Content) {
-                if (-not $IsQuiet -and -not $IsArchive) { Write-Host -ForegroundColor Yellow "   No changes produced.`n" }
+                if (-not $IsQuiet -and -not $IsArchive) {
+                    Write-Host -ForegroundColor Yellow "   No changes produced.`n"
+                }
                 continue
             }
 
             $FailedFixes = @()
 
             foreach ($Attrib in $TargetAttributes) {
-                if ($MalformedValues.ContainsKey($Attrib) -and $Patterns[$Attrib].IsMatch($NewContent)) {
+                if (
+                    $MalformedValues.ContainsKey($Attrib) -and $Patterns[$Attrib].IsMatch(
+                        $NewContent
+                    )
+                ) {
                     $FailedFixes += $Attrib
                 }
             }
 
             if ($FailedFixes.Count -gt 0) {
-                if ($IsArchive) { $ArchiveVerificationFailures++ }
+                if ($IsArchive) {
+                    $ArchiveVerificationFailures++
+                }
                 if (-not $IsQuiet) {
-                    Write-Host -ForegroundColor Red "   Repair verification failed for '$($FailedFixes -join "', '")'.`n"
+                    Write-Host -ForegroundColor Red "   Repair verification failed for '$($FailedFixes -join " ', ' ")'.`n"
                 }
                 continue
             }
@@ -323,13 +376,18 @@ Function Repair-ScsTrafficVariants {
                 $ArchiveReferenceCount += $MalformedValues['Total']
             }
 
-            $writeApproved = $ApplyFixes.IsPresent -and ($WorkerMode.IsPresent -or $PSCmdlet.ShouldProcess($UnitFile.FullName, 'Write repaired content'))
+            $writeApproved = $ApplyFixes.IsPresent -and (
+                $WorkerMode.IsPresent -or $PSCmdlet.ShouldProcess(
+                    $UnitFile.FullName,
+                    'Write repaired content'
+                )
+            )
             if ($writeApproved) {
                 $AnyRepairs = $true
                 if (-not $IsArchive -and -not $NoBackup.IsPresent) {
                     Copy-Item -LiteralPath $UnitFile.FullName -Destination "$($UnitFile.FullName).bak" -Force -ErrorAction Stop
                 }
-                [System.IO.File]::WriteAllText($UnitFile.FullName, $NewContent)
+                [System.IO.File]::WriteAllText( $UnitFile.FullName, $NewContent )
                 $AnyAppliedRepairs = $true
                 if (-not $IsQuiet -and -not $IsArchive) {
                     Write-Host -ForegroundColor Green "   $($UnitFile.Name) repaired successfully.`n"
@@ -387,21 +445,33 @@ Function Repair-ScsTrafficVariants {
                     if (Test-Path -LiteralPath $replacement) {
                         Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue -WhatIf:$false
                     }
-                    if (-not $IsQuiet) { Write-Host "Using ZIPFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray }
+                    if (-not $IsQuiet) {
+                        Write-Host "Using ZIPFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray
+                    }
                     New-ZIPFSArchive -SourceDirectory $WorkingPath.FullName -DestinationPath $replacement -SevenZip $SevenZipExe
                     if (-not $NoBackup.IsPresent) {
                         Copy-Item -LiteralPath $OriginalArchivePath -Destination "$OriginalArchivePath.bak" -Force -ErrorAction Stop
                     }
                     Move-Item -LiteralPath $replacement -Destination $OriginalArchivePath -Force
-                    if (-not $IsQuiet) { Write-Host -ForegroundColor Green "Successfully repacked ZIPFS archive: $($InputItem.Name)`n" }
-                    if (-not $IsQuiet) { Write-Host "Status: updated" -ForegroundColor Green }
+                    if (-not $IsQuiet) {
+                        Write-Host -ForegroundColor Green "Successfully repacked ZIPFS archive: $($InputItem.Name)`n"
+                    }
+                    if (-not $IsQuiet) {
+                        Write-Host "Status: updated" -ForegroundColor Green
+                    }
                     $Summary.ArchivesUpdated++
-                    $outcome = if ($ArchiveVerificationFailures -gt 0) { "updated; $ArchiveVerificationFailures definition(s) failed verification" } else { 'updated' }
+                    $outcome = if ($ArchiveVerificationFailures -gt 0) {
+                        "updated; $ArchiveVerificationFailures definition(s) failed verification"
+                    } else {
+                        'updated'
+                    }
                     Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome $outcome
                 } else {
                     try {
                         $replacement = "$($OriginalArchivePath).zip.new"
-                        if (-not $IsQuiet) { Write-Host "Using HashFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray }
+                        if (-not $IsQuiet) {
+                            Write-Host "Using HashFS repack path for $($InputItem.Name)" -ForegroundColor DarkGray
+                        }
                         if (Test-Path -LiteralPath $replacement) {
                             Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue -WhatIf:$false
                         }
@@ -420,23 +490,38 @@ Function Repair-ScsTrafficVariants {
                             }
                             $Summary.ZipFallbackArchives++
                         } else {
-                            if (-not $IsQuiet) { Write-Host "Status: updated" -ForegroundColor Green }
+                            if (-not $IsQuiet) {
+                                Write-Host "Status: updated" -ForegroundColor Green
+                            }
                         }
-                        $outcome = if ($repackResult.UsedFallback) { 'updated via ZIP fallback' } else { 'updated' }
-                        if ($ArchiveVerificationFailures -gt 0) { $outcome += "; $ArchiveVerificationFailures definition(s) failed verification" }
+                        $outcome = if ($repackResult.UsedFallback) {
+                            'updated via ZIP fallback'
+                        } else {
+                            'updated'
+                        }
+                        if ($ArchiveVerificationFailures -gt 0) {
+                            $outcome += "; $ArchiveVerificationFailures definition(s) failed verification"
+                        }
                         Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome $outcome
-                        if (-not $IsQuiet) { Write-Host -ForegroundColor Green "Successfully repacked HashFS archive as ZIP fallback: $($InputItem.Name)`n" }
+                        if (-not $IsQuiet) {
+                            Write-Host -ForegroundColor Green "Successfully repacked HashFS archive as ZIP fallback: $($InputItem.Name)`n"
+                        }
                     } catch {
                         if (-not $IsQuiet) {
                             Write-Host -ForegroundColor Yellow "HashFS archive detected: automatic repack failed for '$($InputItem.Name)'.`nThe original archive was left untouched.`n"
                         } else {
-                            $AllProblems.Add([PSCustomObject]@{
-                                File = $InputItem.Name
-                                'Attribute/Class' = 'ArchiveRepackSkipped'
-                                Value = 'HashFS repack failed and ZIP fallback also failed'
-                            })
+                            $AllProblems.Add(
+                                [PSCustomObject] @{
+                                    File = $InputItem.Name
+                                    'Attribute/Class' = 'ArchiveRepackSkipped'
+                                    Value =
+                                        'HashFS repack failed and ZIP fallback also failed'
+                                }
+                            )
                         }
-                        if (-not $IsQuiet) { Write-Host "Status: repack failed" -ForegroundColor Red }
+                        if (-not $IsQuiet) {
+                            Write-Host "Status: repack failed" -ForegroundColor Red
+                        }
                         $Summary.FailedRepack++
                         Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome 'repack failed; original left unchanged'
                         Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
@@ -446,7 +531,9 @@ Function Repair-ScsTrafficVariants {
             } catch {
                 $Summary.FailedRepack++
                 Add-ArchiveReport -ArchivePath $OriginalArchivePath -DefinitionCount $ArchiveDefinitionCount -ReferenceCount $ArchiveReferenceCount -Outcome 'repack failed; original left unchanged'
-                if (-not $IsQuiet) { Write-Host "Status: repack failed" -ForegroundColor Red }
+                if (-not $IsQuiet) {
+                    Write-Host "Status: repack failed" -ForegroundColor Red
+                }
                 Write-Error "Failed to repack '$($InputItem.Name)'.`nError: $_"
             } finally {
                 Remove-Item -Path $WorkingPath.FullName -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
@@ -455,18 +542,20 @@ Function Repair-ScsTrafficVariants {
     }
 
     function Invoke-LockedArchiveTarget {
-        param([System.IO.FileInfo]$ArchiveFile)
+        param([System.IO.FileInfo] $ArchiveFile)
 
         $archiveLock = Enter-ArchivePathLock -Path $ArchiveFile.FullName
         try {
-            Process-RootTarget -InputItem $ArchiveFile
+            Invoke-RootTarget -InputItem $ArchiveFile
         } finally {
             Exit-ArchivePathLock -Mutex $archiveLock
         }
     }
 
     $ArchiveTargets = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
-    $SeenArchivePaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $SeenArchivePaths = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
     $IsFolderInput = $false
 
     foreach ($Root in ($RootPath | Sort-Object -Unique)) {
@@ -474,7 +563,9 @@ Function Repair-ScsTrafficVariants {
         if (-not $Resolved) {
             if (-not [System.IO.Path]::IsPathRooted($Root)) {
                 $Alt = Join-Path -Path $ScriptDir -ChildPath $Root
-                if (Test-Path -Path $Alt) { $Resolved = Resolve-Path -Path $Alt -ErrorAction SilentlyContinue }
+                if (Test-Path -Path $Alt) {
+                    $Resolved = Resolve-Path -Path $Alt -ErrorAction SilentlyContinue
+                }
             }
         }
 
@@ -491,11 +582,13 @@ Function Repair-ScsTrafficVariants {
 
         if ($InputItem -is [System.IO.DirectoryInfo]) {
             $IsFolderInput = $true
-            Process-RootTarget -InputItem $InputItem
+            Invoke-RootTarget -InputItem $InputItem
 
             $ArchiveFiles = Get-ChildItem -Path $InputItem.FullName -Include '*.scs', '*.zip' -File -Recurse -ErrorAction SilentlyContinue
             foreach ($ArchiveFile in $ArchiveFiles) {
-                $normalizedArchivePath = [System.IO.Path]::GetFullPath($ArchiveFile.FullName)
+                $normalizedArchivePath = [System.IO.Path]::GetFullPath(
+                    $ArchiveFile.FullName
+                )
                 if ($SeenArchivePaths.Add($normalizedArchivePath)) {
                     $ArchiveTargets.Add($ArchiveFile)
                 }
@@ -504,8 +597,10 @@ Function Repair-ScsTrafficVariants {
         }
 
         if ($InputItem -is [System.IO.FileInfo]) {
-            if ($InputItem.Extension -in '.scs', '.zip') {
-                $normalizedArchivePath = [System.IO.Path]::GetFullPath($InputItem.FullName)
+            if ( $InputItem.Extension -in '.scs', '.zip' ) {
+                $normalizedArchivePath = [System.IO.Path]::GetFullPath(
+                    $InputItem.FullName
+                )
                 if ($SeenArchivePaths.Add($normalizedArchivePath)) {
                     $ArchiveTargets.Add($InputItem)
                 }
@@ -523,21 +618,40 @@ Function Repair-ScsTrafficVariants {
             Invoke-LockedArchiveTarget -ArchiveFile $ArchiveFile
         }
     } elseif ($ArchiveTargets.Count -gt 1 -and $ThrottleLimit -gt 1) {
-        $workerParameters = @{
-            ToolsFolder = $ToolsFolder
-            Attribute = $TargetAttributes
+        $workerParameters = @{ ToolsFolder = $ToolsFolder; Attribute = $TargetAttributes }
+        if ($NoBackup.IsPresent) {
+            $workerParameters.NoBackup = $true
         }
-        if ($NoBackup.IsPresent) { $workerParameters.NoBackup = $true }
-        if ($FullScan.IsPresent) { $workerParameters.FullScan = $true }
-        if ($Quiet.IsPresent) { $workerParameters.Quiet = $true }
+        if ($FullScan.IsPresent) {
+            $workerParameters.FullScan = $true
+        }
+        if ($Quiet.IsPresent) {
+            $workerParameters.Quiet = $true
+        }
         if (-not $IsQuiet) {
             Write-Host "Processing $($ArchiveTargets.Count) archives with up to $ThrottleLimit workers. Each archive is processed as one unit.`n" -ForegroundColor Cyan
         }
-        $workerBatch = Invoke-ArchiveWorkerBatch -ScriptPath $PSCommandPath -ArchivePaths @($ArchiveTargets | ForEach-Object { $_.FullName }) -WorkerParameters $workerParameters -PathParameterName 'RootPath' -Operation 'Repair and replace archive' -ThrottleLimit $ThrottleLimit -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIfPreference
+        $workerBatch = Invoke-ArchiveWorkerBatch -ScriptPath $PSCommandPath -ArchivePaths @(
+            $ArchiveTargets | ForEach-Object {
+                $_.FullName
+            }
+        ) -WorkerParameters $workerParameters -PathParameterName 'RootPath' -Operation 'Repair and replace archive' -ThrottleLimit $ThrottleLimit -ApplyFixes:$ApplyFixes.IsPresent -WhatIf:$WhatIfPreference
         $Summary.DeclinedOperations += $workerBatch.DeclinedPaths.Count
         foreach ($worker in $workerBatch.Results) {
             if ($worker.Result) {
-                foreach ($counter in @('UnitFilesRepaired', 'ArchivesUpdated', 'ZipFallbackArchives', 'WouldRepair', 'WouldUpdateArchives', 'SkippedArchives', 'UnreadableArchives', 'FailedRepack', 'DeclinedOperations')) {
+                foreach (
+                    $counter in @(
+                        'UnitFilesRepaired',
+                        'ArchivesUpdated',
+                        'ZipFallbackArchives',
+                        'WouldRepair',
+                        'WouldUpdateArchives',
+                        'SkippedArchives',
+                        'UnreadableArchives',
+                        'FailedRepack',
+                        'DeclinedOperations'
+                    )
+                ) {
                     $Summary.$counter += $worker.Result.Summary.$counter
                 }
                 foreach ($problem in $worker.Result.Problems) {
@@ -548,12 +662,14 @@ Function Repair-ScsTrafficVariants {
                 }
             } else {
                 $Summary.UnreadableArchives++
-                $Summary.ArchiveReports.Add([PSCustomObject]@{
-                    ArchivePath = $worker.Path
-                    DefinitionCount = 0
-                    ReferenceCount = 0
-                    Outcome = 'worker failed; left unchanged'
-                })
+                $Summary.ArchiveReports.Add(
+                    [PSCustomObject] @{
+                        ArchivePath = $worker.Path
+                        DefinitionCount = 0
+                        ReferenceCount = 0
+                        Outcome = 'worker failed; left unchanged'
+                    }
+                )
                 if (-not $IsQuiet) {
                     Write-Host "Worker failed for '$($worker.Path)': $($worker.Errors -join '; ')" -ForegroundColor Red
                 }
@@ -566,7 +682,7 @@ Function Repair-ScsTrafficVariants {
     }
 
     if ($WorkerMode.IsPresent) {
-        return [PSCustomObject]@{
+        return [PSCustomObject] @{
             WorkerResult = $true
             Summary = $Summary
             Problems = $AllProblems.ToArray()
@@ -593,7 +709,9 @@ Function Repair-ScsTrafficVariants {
         }
     }
 
-    Write-Host "`nSummary: $($Summary.UnitFilesRepaired) unit file(s) repaired; $($Summary.ArchivesUpdated) archive(s) updated ($($Summary.ZipFallbackArchives) via ZIP fallback); $($Summary.WouldRepair) unit file(s) would be repaired; $($Summary.WouldUpdateArchives) archive(s) would be updated; $($Summary.SkippedArchives) archive(s) skipped; $($Summary.UnreadableArchives) unreadable archive(s); $($Summary.FailedRepack) repack failure(s); $($Summary.DeclinedOperations) operation(s) declined.`n"
+    if (-not $IsQuiet) {
+        Write-Host "`nSummary: $($Summary.UnitFilesRepaired) unit file(s) repaired; $($Summary.ArchivesUpdated) archive(s) updated ($($Summary.ZipFallbackArchives) via ZIP fallback); $($Summary.WouldRepair) unit file(s) would be repaired; $($Summary.WouldUpdateArchives) archive(s) would be updated; $($Summary.SkippedArchives) archive(s) skipped; $($Summary.UnreadableArchives) unreadable archive(s); $($Summary.FailedRepack) repack failure(s); $($Summary.DeclinedOperations) operation(s) declined.`n"
+    }
 
     if ($IsQuiet) {
         return $AllProblems

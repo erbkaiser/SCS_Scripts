@@ -1,67 +1,80 @@
+#Requires -Version 5.1
+
 function Resolve-ArchiveThrottleLimit {
     param(
-        [int]$Requested,
-        [bool]$IsFolderInput
+        [int] $Requested,
+        [bool] $IsFolderInput
     )
 
     if ($Requested -gt 0) {
         return $Requested
     }
 
-    if ($IsFolderInput) { return 4 }
+    if ($IsFolderInput) {
+        return 4
+    }
     return 1
 }
 
 function Enter-ArchivePathLock {
-    param([string]$Path)
+    param([string] $Path)
 
     $normalizedPath = [System.IO.Path]::GetFullPath($Path).ToUpperInvariant()
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $hash = [System.BitConverter]::ToString($sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($normalizedPath))).Replace('-', '')
+        $hash = [System.BitConverter]::ToString(
+            $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($normalizedPath))
+        ).Replace( '-', '' )
     } finally {
         $sha256.Dispose()
     }
 
-    $mutex = [System.Threading.Mutex]::new($false, "Local\ATSArchive_$hash")
+    $mutex = [System.Threading.Mutex]::new( $false, "Local\ATSArchive_$hash" )
     try {
         $null = $mutex.WaitOne()
     } catch [System.Threading.AbandonedMutexException] {
+
     }
 
     return $mutex
 }
 
 function Exit-ArchivePathLock {
-    param([System.Threading.Mutex]$Mutex)
+    param([System.Threading.Mutex] $Mutex)
 
     if ($Mutex) {
-        try { $Mutex.ReleaseMutex() } finally { $Mutex.Dispose() }
+        try {
+            $Mutex.ReleaseMutex()
+        } finally {
+            $Mutex.Dispose()
+        }
     }
 }
 
 function Test-ArchiveOperationApproval {
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [Parameter(Mandatory)][string]$Target,
-        [Parameter(Mandatory)][string]$Operation,
-        [switch]$ApplyFixes
+        [Parameter(Mandatory)] [string] $Target,
+        [Parameter(Mandatory)] [string] $Operation,
+        [switch] $ApplyFixes
     )
 
-    if (-not $ApplyFixes.IsPresent) { return $false }
-    return $PSCmdlet.ShouldProcess($Target, $Operation)
+    if (-not $ApplyFixes.IsPresent) {
+        return $false
+    }
+    return $PSCmdlet.ShouldProcess( $Target, $Operation )
 }
 
 function Invoke-ArchiveWorkerBatch {
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [Parameter(Mandatory)][string]$ScriptPath,
-        [Parameter(Mandatory)][string[]]$ArchivePaths,
-        [hashtable]$WorkerParameters = @{},
-        [string]$PathParameterName = 'Folder',
-        [string]$Operation = 'Process archive',
-        [ValidateRange(1, 64)][int]$ThrottleLimit = 4,
-        [switch]$ApplyFixes
+        [Parameter(Mandatory)] [string] $ScriptPath,
+        [Parameter(Mandatory)] [string[]] $ArchivePaths,
+        [hashtable] $WorkerParameters = @{},
+        [string] $PathParameterName = 'Folder',
+        [string] $Operation = 'Process archive',
+        [ValidateRange(1, 64)] [int] $ThrottleLimit = 4,
+        [switch] $ApplyFixes
     )
 
     $workItems = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -87,17 +100,18 @@ function Invoke-ArchiveWorkerBatch {
             $workerArguments.Remove('ApplyFixes')
         }
 
-        $workItems.Add([PSCustomObject]@{
-            Path = $archivePath
-            Arguments = $workerArguments
-        })
+        $workItems.Add(
+            [PSCustomObject] @{ Path = $archivePath; Arguments = $workerArguments }
+        )
     }
 
     $results = @()
     if ($workItems.Count -gt 0) {
-        $results = @(Invoke-ArchiveWorkerPool -ScriptPath $ScriptPath -WorkItems $workItems.ToArray() -ThrottleLimit $ThrottleLimit)
+        $results = @(
+            Invoke-ArchiveWorkerPool -ScriptPath $ScriptPath -WorkItems $workItems.ToArray() -ThrottleLimit $ThrottleLimit
+        )
     }
-    return [PSCustomObject]@{
+    return [PSCustomObject] @{
         Results = $results
         DeclinedPaths = $declinedPaths.ToArray()
     }
@@ -106,47 +120,59 @@ function Invoke-ArchiveWorkerBatch {
 function Invoke-ArchiveWorkerPool {
     param(
         [Parameter(Mandatory)]
-        [string]$ScriptPath,
+        [string] $ScriptPath,
         [Parameter(Mandatory)]
-        [object[]]$WorkItems,
+        [object[]] $WorkItems,
         [ValidateRange(1, 64)]
-        [int]$ThrottleLimit
+        [int] $ThrottleLimit
     )
 
     function Receive-CompletedArchiveWorker {
-        param([PSCustomObject]$Entry)
+        param([PSCustomObject] $Entry)
 
         $jobOutput = @(Receive-Job -Job $Entry.Job -ErrorAction SilentlyContinue)
-        $envelope = $jobOutput | Where-Object {
-            $_ -and $_.PSObject.Properties['WorkerEnvelope'] -and $_.WorkerEnvelope
-        } | Select-Object -First 1
+        $envelope = $jobOutput
+            | Where-Object {
+                $_ -and $_.PSObject.Properties['WorkerEnvelope'] -and $_.WorkerEnvelope
+            }
+            | Select-Object -First 1
 
         $silentWorker = $Entry.Arguments -and (
-            ($Entry.Arguments.ContainsKey('Silent') -and [bool]$Entry.Arguments.Silent) -or
-            ($Entry.Arguments.ContainsKey('Quiet') -and [bool]$Entry.Arguments.Quiet)
+            (
+                $Entry.Arguments.ContainsKey('Silent') -and [bool] $Entry.Arguments.Silent
+            ) -or
+            ($Entry.Arguments.ContainsKey('Quiet') -and [bool] $Entry.Arguments.Quiet)
         )
 
         if ($envelope) {
             if (-not $silentWorker) {
-            foreach ($log in $envelope.Logs) {
-                if ($log.HasForegroundColor) {
-                    Write-Host "[$($Entry.Path)] $($log.Message)" -ForegroundColor $log.ForegroundColor
-                } else {
-                    Write-Host "[$($Entry.Path)] $($log.Message)"
+                foreach ($log in $envelope.Logs) {
+                    if ($log.HasForegroundColor) {
+                        Write-Host "[$($Entry.Path)] $($log.Message)" -ForegroundColor $log.ForegroundColor
+                    } else {
+                        Write-Host "[$($Entry.Path)] $($log.Message)"
+                    }
                 }
             }
-            }
-            $workerResult = $envelope.Output | Where-Object {
-                $_ -and $_.PSObject.Properties['WorkerResult'] -and $_.WorkerResult
-            } | Select-Object -First 1
+            $workerResult = $envelope.Output
+                | Where-Object {
+                    $_ -and $_.PSObject.Properties['WorkerResult'] -and $_.WorkerResult
+                }
+                | Select-Object -First 1
         } else {
             $workerResult = $null
         }
 
         $workerErrors = @()
-        if ($envelope -and $envelope.Failed) { $workerErrors += $envelope.Error }
-        $workerErrors += @($Entry.Job.ChildJobs[0].Error | ForEach-Object { $_.ToString() })
-        $result = [PSCustomObject]@{
+        if ($envelope -and $envelope.Failed) {
+            $workerErrors += $envelope.Error
+        }
+        $workerErrors += @(
+            $Entry.Job.ChildJobs[0].Error | ForEach-Object {
+                $_.ToString()
+            }
+        )
+        $result = [PSCustomObject] @{
             Path = $Entry.Path
             Result = $workerResult
             Failed = ($null -eq $workerResult)
@@ -161,40 +187,52 @@ function Invoke-ArchiveWorkerPool {
     $nextWorkItem = 0
 
     while ($nextWorkItem -lt $WorkItems.Count -or $activeWorkers.Count -gt 0) {
-        while ($nextWorkItem -lt $WorkItems.Count -and $activeWorkers.Count -lt $ThrottleLimit) {
+        while (
+            $nextWorkItem -lt $WorkItems.Count -and $activeWorkers.Count -lt $ThrottleLimit
+        ) {
             $item = $WorkItems[$nextWorkItem]
             $job = Start-Job -ArgumentList $ScriptPath, $item.Arguments -ScriptBlock {
-                param($WorkerScriptPath, $WorkerArguments)
+                param(
+                    $WorkerScriptPath,
+                    $WorkerArguments
+                )
+
                 $global:workerLogs = [System.Collections.Generic.List[PSCustomObject]]::new()
+
                 function Write-Host {
                     [CmdletBinding()]
                     param(
                         [Parameter(Position = 0, ValueFromPipeline = $true)]
-                        [object]$Object,
-                        [System.ConsoleColor]$ForegroundColor,
-                        [System.ConsoleColor]$BackgroundColor,
-                        [switch]$NoNewline
+                        [object] $Object,
+                        [System.ConsoleColor] $ForegroundColor,
+                        [System.ConsoleColor] $BackgroundColor,
+                        [switch] $NoNewline
                     )
+
                     process {
-                        $global:workerLogs.Add([PSCustomObject]@{
-                            Message = [string]$Object
-                            ForegroundColor = $ForegroundColor
-                            HasForegroundColor = $PSBoundParameters.ContainsKey('ForegroundColor')
-                            BackgroundColor = $BackgroundColor
-                            NoNewline = $NoNewline.IsPresent
-                        })
+                        $global:workerLogs.Add(
+                            [PSCustomObject] @{
+                                Message = [string] $Object
+                                ForegroundColor = $ForegroundColor
+                                HasForegroundColor =
+                                    $PSBoundParameters.ContainsKey('ForegroundColor')
+                                BackgroundColor = $BackgroundColor
+                                NoNewline = $NoNewline.IsPresent
+                            }
+                        )
                     }
                 }
+
                 try {
                     $capturedOutput = @(& $WorkerScriptPath @WorkerArguments *>&1)
-                    [PSCustomObject]@{
+                    [PSCustomObject] @{
                         WorkerEnvelope = $true
                         Failed = $false
                         Logs = $global:workerLogs.ToArray()
                         Output = $capturedOutput
                     }
                 } catch {
-                    [PSCustomObject]@{
+                    [PSCustomObject] @{
                         WorkerEnvelope = $true
                         Failed = $true
                         Error = $_.ToString()
@@ -203,14 +241,29 @@ function Invoke-ArchiveWorkerPool {
                     }
                 }
             }
-            $activeWorkers.Add([PSCustomObject]@{ Path = $item.Path; Job = $job; Arguments = $item.Arguments })
+            $activeWorkers.Add(
+                [PSCustomObject] @{
+                    Path = $item.Path
+                    Job = $job
+                    Arguments = $item.Arguments
+                }
+            )
             $nextWorkItem++
         }
 
-        $completedJob = Wait-Job -Job @($activeWorkers | ForEach-Object { $_.Job }) -Any | Select-Object -First 1
-        $completedEntry = $activeWorkers | Where-Object { $_.Job.Id -eq $completedJob.Id } | Select-Object -First 1
+        $completedJob = Wait-Job -Job @(
+            $activeWorkers | ForEach-Object {
+                $_.Job
+            }
+        ) -Any
+            | Select-Object -First 1
+        $completedEntry = $activeWorkers
+            | Where-Object {
+                $_.Job.Id -eq $completedJob.Id
+            }
+            | Select-Object -First 1
         $results.Add((Receive-CompletedArchiveWorker -Entry $completedEntry))
-        [void]$activeWorkers.Remove($completedEntry)
+        [void] $activeWorkers.Remove($completedEntry)
     }
 
     return $results.ToArray()

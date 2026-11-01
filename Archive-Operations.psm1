@@ -43,9 +43,11 @@ function Get-SCSArchiveKind {
             if ($signature -eq 'SCS#') { return 'HashFS' }
             if ($signature.Substring(0, 2) -eq 'PK') { return 'ZIPFS' }
         }
-    } catch {
+    }
+    catch {
         return 'Unreadable'
-    } finally {
+    }
+    finally {
         if ($stream) { $stream.Dispose() }
     }
 
@@ -89,8 +91,8 @@ function Test-ZipArchiveEncrypted {
         }
 
         $zip64Required = $entryCount -eq [uint16]::MaxValue -or
-            $centralDirectorySize -eq [uint32]::MaxValue -or
-            $centralDirectoryOffset -eq [uint32]::MaxValue
+        $centralDirectorySize -eq [uint32]::MaxValue -or
+        $centralDirectoryOffset -eq [uint32]::MaxValue
         if ($zip64Required) {
             $locatorOffset = $eocdOffset - 20
             if ($locatorOffset -lt 0) { return $false }
@@ -114,10 +116,10 @@ function Test-ZipArchiveEncrypted {
             $entriesOnDisk = [System.BitConverter]::ToUInt64($zip64Eocd, 24)
             $entryCount = [System.BitConverter]::ToUInt64($zip64Eocd, 32)
             $centralDirectorySize = [System.BitConverter]::ToUInt64($zip64Eocd, 40)
-            $centralDirectoryOffset = [System.BitConverter]::ToUInt64($zip64Eocd, 48)
             if ($entriesOnDisk -ne $entryCount -or $centralDirectorySize -gt $zip64Offset) { return $false }
             $centralDirectoryStart = [long]($zip64Offset - $centralDirectorySize)
-        } else {
+        }
+        else {
             if ($entriesOnDisk -ne $entryCount -or $centralDirectorySize -gt $eocdOffset) { return $false }
             $centralDirectoryStart = [long]($eocdOffset - $centralDirectorySize)
         }
@@ -138,7 +140,7 @@ function Test-ZipArchiveEncrypted {
             $extra = $reader.ReadBytes($extraLength)
             if ($extra.Length -ne $extraLength) { return $false }
 
-            for ($extraOffset = 0; $extraOffset + 4 -le $extra.Length;) {
+            for ($extraOffset = 0; $extraOffset + 4 -le $extra.Length; ) {
                 $extraId = [System.BitConverter]::ToUInt16($extra, $extraOffset)
                 $extraSize = [System.BitConverter]::ToUInt16($extra, $extraOffset + 2)
                 if ($extraOffset + 4 + $extraSize -gt $extra.Length) { return $false }
@@ -150,9 +152,11 @@ function Test-ZipArchiveEncrypted {
         }
 
         return $false
-    } catch {
+    }
+    catch {
         return $false
-    } finally {
+    }
+    finally {
         if ($reader) { $reader.Dispose() }
         elseif ($stream) { $stream.Dispose() }
     }
@@ -167,9 +171,11 @@ function Test-ZipArchiveReadable {
     try {
         $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
         return $true
-    } catch {
+    }
+    catch {
         return $false
-    } finally {
+    }
+    finally {
         if ($archive) { $archive.Dispose() }
     }
 }
@@ -195,8 +201,8 @@ function Invoke-ArchiveTool {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.Arguments = ($Arguments | ForEach-Object {
-        '"{0}"' -f (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1')
-    }) -join ' '
+            '"{0}"' -f (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1')
+        }) -join ' '
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -219,7 +225,8 @@ function Invoke-ArchiveTool {
             $details = (@($output, $errorOutput) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
             throw "Archive tool failed with exit code $($process.ExitCode): $Tool $($Arguments -join ' ')`n$details"
         }
-    } finally {
+    }
+    finally {
         $process.Dispose()
     }
 }
@@ -237,7 +244,8 @@ function Expand-ZIPFSArchive {
 
     if ($SevenZip) {
         Invoke-ArchiveTool -Tool $SevenZip -Arguments @('x', '-y', "-o$DestinationPath", $ArchivePath) -WorkingDirectory $DestinationPath
-    } else {
+    }
+    else {
         Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force -WhatIf:$false
     }
 }
@@ -265,7 +273,8 @@ function New-ZIPFSArchive {
 
     if ($SevenZip) {
         Invoke-ArchiveTool -Tool $SevenZip -Arguments @('a', '-tzip', '-y', $DestinationPath, '*') -WorkingDirectory $SourceDirectory
-    } else {
+    }
+    else {
         Compress-Archive -Path (Join-Path $SourceDirectory '*') -DestinationPath $DestinationPath -Force -WhatIf:$false | Out-Null
     }
 }
@@ -297,10 +306,12 @@ function New-SCSArchiveWithFallback {
         try {
             New-HashFSArchive -SourceDirectory $SourceDirectory -DestinationPath $DestinationPath -Packer $Packer
             return [PSCustomObject]@{ ArchiveKind = 'HashFS'; UsedFallback = $false }
-        } catch {
+        }
+        catch {
             if (-not $AllowZIPFallback.IsPresent) { throw }
         }
-    } elseif (-not $AllowZIPFallback.IsPresent) {
+    }
+    elseif (-not $AllowZIPFallback.IsPresent) {
         throw 'scs_packer.exe was not found and ZIPFS fallback is disabled.'
     }
 
